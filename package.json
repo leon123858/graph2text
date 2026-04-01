@@ -1,0 +1,28 @@
+{
+  "name": "semantic-time-series",
+  "version": "1.0.0",
+  "description": "Convert complex time-series data into feature-rich text narratives",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w",
+    "test": "yarn build && node ./dist/test.js",
+    "test:unit": "vitest run",
+    "coverage": "vitest run --coverage",
+    "prepublishOnly": "yarn build"
+  },
+  "author": "Antigravity",
+  "license": "MIT",
+  "dependencies": {
+    "simple-statistics": "^7.8.9"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "@vitest/coverage-v8": "^4.1.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.2"
+  }
+}
