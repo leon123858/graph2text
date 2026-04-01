@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc -w",
-    "test": "yarn test:unit && yarn test:integration-mock && yarn test:integration-real",
+    "test": "yarn build && yarn test:unit && yarn test:integration-mock && yarn test:integration-real",
     "test:unit": "vitest run",
     "test:integration-mock": "node --loader ts-node/esm tests/integration/generateMockHtml.ts",
     "test:integration-real": "node --loader ts-node/esm tests/integration/csvRealDataValidation.ts",

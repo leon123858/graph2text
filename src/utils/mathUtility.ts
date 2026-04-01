@@ -1,7 +1,79 @@
 import { sampleStandardDeviation, sampleCorrelation, variance, mean } from 'simple-statistics';
-import { PeriodResult, LagResult, TurningPoint, PeakSignal, Segment } from '../types.js';
+import { DataQualityIssue, PeriodResult, LagResult, TurningPoint, PeakSignal, Segment, TimePoint } from '../types.js';
 
 export class MathUtility {
+  public static assessSeriesQuality(data: TimePoint[]): DataQualityIssue[] {
+    const issues: DataQualityIssue[] = [];
+    if (data.length === 0) {
+      issues.push({
+        code: 'empty_series',
+        severity: 'error',
+        message: 'The series is empty.',
+      });
+      return issues;
+    }
+
+    if (data.length < 8) {
+      issues.push({
+        code: 'too_short',
+        severity: 'warning',
+        message: `Only ${data.length} points are available, so advanced feature extraction may be unstable.`,
+      });
+    }
+
+    const values = data.map((point) => point.value);
+    if (variance(values) === 0) {
+      issues.push({
+        code: 'constant_series',
+        severity: 'warning',
+        message: 'The series is constant, so pattern analysis is not meaningful.',
+      });
+    }
+
+    let negativeJumps = 0;
+    let duplicateTimestamps = 0;
+    const gaps: number[] = [];
+
+    for (let i = 1; i < data.length; i++) {
+      const delta = data[i].time - data[i - 1].time;
+      if (delta < 0) negativeJumps++;
+      if (delta === 0) duplicateTimestamps++;
+      if (delta > 0) gaps.push(delta);
+    }
+
+    if (negativeJumps > 0) {
+      issues.push({
+        code: 'negative_time_jump',
+        severity: 'warning',
+        message: `The timestamp moves backwards ${negativeJumps} times.`,
+      });
+    }
+
+    if (duplicateTimestamps > 0) {
+      issues.push({
+        code: 'duplicate_timestamp',
+        severity: 'warning',
+        message: `The series contains ${duplicateTimestamps} duplicate timestamps.`,
+      });
+    }
+
+    if (gaps.length > 4) {
+      const sorted = [...gaps].sort((a, b) => a - b);
+      const medianGap = sorted[Math.floor(sorted.length / 2)];
+      const largeGapCount = gaps.filter((gap) => gap > medianGap * 4).length;
+      const gapRatio = largeGapCount / gaps.length;
+      if (gapRatio > 0.05) {
+        issues.push({
+          code: 'high_gap_ratio',
+          severity: 'warning',
+          message: `${(gapRatio * 100).toFixed(1)}% of intervals are large gaps relative to the median sampling interval.`,
+        });
+      }
+    }
+
+    return issues;
+  }
+
   public static detectDominantPeriod(values: number[], maxLag: number): PeriodResult {
     const n = values.length;
 
@@ -54,6 +126,32 @@ export class MathUtility {
     }
 
     return { isPeriodic: bestFinalPeriod > 0, period: bestFinalPeriod };
+  }
+
+  public static detectCandidatePeriods(values: number[], maxLag: number, limit: number = 3): number[] {
+    const n = values.length;
+    if (n < 8 || variance(values) === 0) return [];
+
+    const candidates: Array<{ lag: number; corr: number }> = [];
+    for (let lag = 2; lag <= Math.min(maxLag, Math.floor(n / 2)); lag++) {
+      const slice1 = values.slice(0, n - lag);
+      const slice2 = values.slice(lag, n);
+      if (slice1.length < 4 || variance(slice1) === 0 || variance(slice2) === 0) continue;
+      const corr = sampleCorrelation(slice1, slice2);
+      if (corr > 0.35) {
+        candidates.push({ lag, corr });
+      }
+    }
+
+    candidates.sort((left, right) => right.corr - left.corr);
+    const selected: number[] = [];
+    for (const candidate of candidates) {
+      if (selected.every((period) => Math.abs(period - candidate.lag) > 2)) {
+        selected.push(candidate.lag);
+      }
+      if (selected.length >= limit) break;
+    }
+    return selected;
   }
 
   public static calculateCrossCorrelation(a: number[], b: number[], maxLag: number): LagResult {
@@ -198,21 +296,30 @@ export class MathUtility {
 
   public static zScorePeakDetection(values: number[], lag: number = 30, threshold: number = 3.5, influence: number = 0.5): PeakSignal[] {
     const n = values.length;
-    if (n <= lag) return [];
+    const effectiveLag = Math.max(2, Math.min(lag, n - 1));
+    if (n <= effectiveLag) return [];
 
     const signals: number[] = new Array(n).fill(0);
     const filteredY = [...values];
     const avgFilter = new Array(n).fill(0);
     const stdFilter = new Array(n).fill(0);
 
-    const initialWindow = values.slice(0, lag);
-    avgFilter[lag - 1] = mean(initialWindow);
-    stdFilter[lag - 1] = sampleStandardDeviation(initialWindow);
+    const initialWindow = values.slice(0, effectiveLag);
+    if (initialWindow.length < 2) return [];
+    avgFilter[effectiveLag - 1] = mean(initialWindow);
+    stdFilter[effectiveLag - 1] = sampleStandardDeviation(initialWindow) || 0;
 
     const results: PeakSignal[] = [];
 
-    for (let i = lag; i < n; i++) {
-        if (Math.abs(values[i] - avgFilter[i - 1]) > threshold * stdFilter[i - 1]) {
+    for (let i = effectiveLag; i < n; i++) {
+        const baselineStd = stdFilter[i - 1] || 0;
+        const deviation = Math.abs(values[i] - avgFilter[i - 1]);
+        const isSignal =
+          baselineStd === 0
+            ? deviation > 0
+            : deviation > threshold * baselineStd;
+
+        if (isSignal) {
             if (values[i] > avgFilter[i - 1]) {
                 signals[i] = 1;
             } else {
@@ -226,10 +333,15 @@ export class MathUtility {
 
         // Optimized update: instead of slice-mean, we could do incremental mean/std, 
         // but for robustness in JS with small windows (30), slice is fine.
-        const start = i - lag + 1;
+        const start = i - effectiveLag + 1;
         const window = filteredY.slice(start, i + 1);
+        if (window.length < 2) {
+            avgFilter[i] = filteredY[i];
+            stdFilter[i] = 0;
+            continue;
+        }
         avgFilter[i] = mean(window);
-        stdFilter[i] = sampleStandardDeviation(window);
+        stdFilter[i] = sampleStandardDeviation(window) || 0;
 
         if (signals[i] !== 0 && signals[i - 1] === 0) {
             results.push({

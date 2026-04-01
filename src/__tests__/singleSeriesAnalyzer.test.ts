@@ -63,4 +63,13 @@ describe('SingleSeriesAnalyzer', () => {
         expect(output).toContain('[Landmark Events & Anomalies]');
         expect(output).toContain('Spike/High');
     });
+
+    it('does not crash on short periodic series after folding', () => {
+        const dummy: TimePoint[] = [];
+        for (let i = 0; i < 16; i++) {
+            dummy.push({ time: i, value: i % 4 });
+        }
+
+        expect(() => SingleSeriesAnalyzer.process(dummy, 'ShortPeriodic')).not.toThrow();
+    });
 });

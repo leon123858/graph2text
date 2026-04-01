@@ -2,7 +2,7 @@ import fs from 'fs';
 import readline from 'readline';
 import path, { join } from 'path';
 import { fileURLToPath } from 'url';
-import { SemanticFeatureEngine, TimePoint } from '../../src/index.js';
+import { SemanticFeatureEngine, DatasetRow, TimePoint } from '../../src/index.js';
 
 async function validateRealTelemetryData() {
     const csvPath = join(process.cwd(), 'data', '01_raw_telemetry.csv');
@@ -22,6 +22,7 @@ async function validateRealTelemetryData() {
 
     let headers: string[] = [];
     const metricData: { [key: string]: TimePoint[] } = {};
+    const rows: DatasetRow[] = [];
 
     let lineCount = 0;
     
@@ -39,25 +40,34 @@ async function validateRealTelemetryData() {
         } else {
             const timeVal = parseFloat(columns[0]); // ts
             if (isNaN(timeVal)) continue;
+            const row: DatasetRow = {};
 
+            row[headers[0]] = timeVal;
             for (let i = 1; i < headers.length; i++) {
                 const headerName = headers[i];
                 const value = parseFloat(columns[i]);
                 if (!isNaN(value)) {
+                    row[headerName] = value;
                     metricData[headerName].push({
                         time: timeVal,
                         value: value
                     });
                 }
             }
+            rows.push(row);
         }
         lineCount++;
     }
 
     console.log(`[Success] Parsed ${lineCount - 1} rows of telemetry data.\n`);
+    const datasetResult = SemanticFeatureEngine.analyzeDataset(rows);
+    console.log(`[Dataset Summary]`);
+    console.log(datasetResult.narratives[0]);
     
     // Prepare for integration processing
-    const columnsToAnalyze = Object.keys(metricData);
+    const columnsToAnalyze = datasetResult.profile.fieldProfiles
+        .filter(field => field.role === 'continuous' || field.role === 'counter')
+        .map(field => field.name);
     
     console.log(`[Phase 2] Analyzing Single Metrics (${columnsToAnalyze.length} columns)...`);
     
@@ -72,18 +82,10 @@ async function validateRealTelemetryData() {
         console.log(report);
     }
 
-    console.log(`\n[Phase 3] Relational Causal Analysis on 2 Random Metrics...`);
+    console.log(`\n[Phase 3] Relational Causal Analysis on 2 Deterministic Metrics...`);
     
     if (columnsToAnalyze.length >= 2) {
-        // Pick two random but distinct metrics
-        const pick1 = Math.floor(Math.random() * columnsToAnalyze.length);
-        let pick2 = Math.floor(Math.random() * columnsToAnalyze.length);
-        while (pick1 === pick2) {
-            pick2 = Math.floor(Math.random() * columnsToAnalyze.length);
-        }
-
-        const colA = columnsToAnalyze[pick1];
-        const colB = columnsToAnalyze[pick2];
+        const [colA, colB] = columnsToAnalyze;
 
         console.log(`Analyzing: [${colA}] vs [${colB}]`);
         const relationReport = SemanticFeatureEngine.analyzeRelation(metricData[colA], metricData[colB], colA, colB);
@@ -431,4 +433,3 @@ async function validateRealTelemetryData() {
 }
 
 validateRealTelemetryData().catch(console.error);
-

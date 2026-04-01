@@ -1,17 +1,62 @@
 import { sampleCorrelation } from 'simple-statistics';
+import { TimeSeriesAlignment } from '../pipeline/alignment.js';
 import { MathUtility } from '../utils/mathUtility.js';
-import { TimePoint } from '../types.js';
+import { RelationFeatureSummary, TimePoint } from '../types.js';
 
 export class MultiSeriesAnalyzer {
+  public static summarize(dataA: TimePoint[], dataB: TimePoint[], nameA: string, nameB: string): RelationFeatureSummary {
+    const alignment = TimeSeriesAlignment.alignByTimestamp(dataA, dataB);
+    const alignedA = TimeSeriesAlignment.toTimePoints(alignment.points, 'a');
+    const alignedB = TimeSeriesAlignment.toTimePoints(alignment.points, 'b');
+    const valsA = alignedA.map((point) => point.value);
+    const valsB = alignedB.map((point) => point.value);
+    const staticCorrelation =
+      valsA.length > 3 && valsB.length > 3 ? sampleCorrelation(valsA, valsB) : 0;
+    const lagResult = MathUtility.calculateCrossCorrelation(valsA, valsB, Math.floor(valsA.length / 3));
+
+    return {
+      nameA,
+      nameB,
+      alignedPoints: alignment.points.length,
+      coverageRatio: alignment.coverageRatio,
+      bestLag: lagResult.bestLag,
+      bestCorrelation: lagResult.bestCorrelation,
+      staticCorrelation,
+      qualityIssues: [
+        ...alignment.qualityIssues,
+        ...MathUtility.assessSeriesQuality(alignedA),
+        ...MathUtility.assessSeriesQuality(alignedB),
+      ],
+    };
+  }
+
   public static process(dataA: TimePoint[], dataB: TimePoint[], nameA: string, nameB: string): string {
-    const n = Math.min(dataA.length, dataB.length);
-    const valsA = dataA.slice(0, n).map((d) => d.value);
-    const valsB = dataB.slice(0, n).map((d) => d.value);
+    const alignment = TimeSeriesAlignment.alignByTimestamp(dataA, dataB);
+    const alignedA = TimeSeriesAlignment.toTimePoints(alignment.points, 'a');
+    const alignedB = TimeSeriesAlignment.toTimePoints(alignment.points, 'b');
+    const n = Math.min(alignedA.length, alignedB.length);
+    const valsA = alignedA.slice(0, n).map((d) => d.value);
+    const valsB = alignedB.slice(0, n).map((d) => d.value);
+    if (n === 0) {
+      return `Time-Series Causal Relationship Analysis Report for [${nameA}] and [${nameB}]:\n\n- No aligned timestamps were found, so relational analysis could not be performed.\n`;
+    }
 
     let sb = `Time-Series Causal Relationship Analysis Report for [${nameA}] and [${nameB}]:\n\n`;
+    sb += `[Alignment Gate]\n`;
+    sb += `- Timestamp-aligned samples: ${n}\n`;
+    sb += `- Coverage ratio: ${(alignment.coverageRatio * 100).toFixed(1)}%\n`;
+    if (alignment.qualityIssues.length > 0) {
+      for (const issue of alignment.qualityIssues) {
+        sb += `- ${issue.severity.toUpperCase()}: ${issue.message}\n`;
+      }
+    }
+    sb += '\n';
 
     // 1. Concurrent Pearson Correlation
-    const r = sampleCorrelation(valsA, valsB);
+    const r =
+      valsA.length > 3 && valsB.length > 3 && Number.isFinite(sampleCorrelation(valsA, valsB))
+        ? sampleCorrelation(valsA, valsB)
+        : 0;
     const absR = Math.abs(r);
     
     let rDesc = 'Moderate static correlation';
@@ -70,11 +115,11 @@ export class MultiSeriesAnalyzer {
     for (let i = 1; i < n; i++) {
       if (valsA[i - 1] <= valsB[i - 1] && valsA[i] > valsB[i]) {
         crossCount++;
-        lastCross = `${dataA[i].time} (${nameA} upwardly crossed ${nameB})`;
+        lastCross = `${alignedA[i].time} (${nameA} upwardly crossed ${nameB})`;
       }
       if (valsA[i - 1] >= valsB[i - 1] && valsA[i] < valsB[i]) {
         crossCount++;
-        lastCross = `${dataA[i].time} (${nameB} upwardly crossed ${nameA})`;
+        lastCross = `${alignedA[i].time} (${nameB} upwardly crossed ${nameA})`;
       }
     }
 

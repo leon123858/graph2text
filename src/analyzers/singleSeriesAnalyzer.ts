@@ -1,21 +1,83 @@
 import { min, max, mean } from 'simple-statistics';
 import { MathUtility } from '../utils/mathUtility.js';
-import { TimePoint } from '../types.js';
+import { SeriesFeatureSummary, TimePoint } from '../types.js';
 
 export class SingleSeriesAnalyzer {
+  public static summarize(data: TimePoint[], name: string): SeriesFeatureSummary {
+    const sortedData = [...data].sort((left, right) => left.time - right.time);
+    const values = sortedData.map((d) => d.value);
+    const dominantPeriods = MathUtility.detectCandidatePeriods(values, Math.floor(values.length / 3));
+    const anomalies = MathUtility.zScorePeakDetection(values, Math.min(30, Math.max(5, Math.floor(values.length / 5))), 3.5, 0.1);
+    const qualityIssues = MathUtility.assessSeriesQuality(sortedData);
+
+    let positiveMoves = 0;
+    let negativeMoves = 0;
+    for (let i = 1; i < values.length; i++) {
+      const delta = values[i] - values[i - 1];
+      if (delta > 0) positiveMoves++;
+      if (delta < 0) negativeMoves++;
+    }
+
+    let trend: SeriesFeatureSummary['trend'] = 'stable';
+    if (positiveMoves > negativeMoves * 1.25) trend = 'rising';
+    else if (negativeMoves > positiveMoves * 1.25) trend = 'falling';
+    else if (positiveMoves > 0 && negativeMoves > 0) trend = 'mixed';
+
+    const range = values.length === 0 ? 0 : Math.max(...values) - Math.min(...values);
+    const avgAbs = values.length === 0 ? 0 : values.reduce((sum, value) => sum + Math.abs(value), 0) / values.length;
+    const relativeRange = avgAbs === 0 ? range : range / avgAbs;
+    let volatility: SeriesFeatureSummary['volatility'] = 'low';
+    if (relativeRange > 0.8) volatility = 'high';
+    else if (relativeRange > 0.25) volatility = 'medium';
+
+    return {
+      name,
+      sampleCount: sortedData.length,
+      duration: sortedData.length > 1 ? sortedData[sortedData.length - 1].time - sortedData[0].time : undefined,
+      dominantPeriods,
+      trend,
+      volatility,
+      anomalies,
+      qualityIssues,
+    };
+  }
+
   public static process(data: TimePoint[], name: string): string {
-    const n = data.length;
+    const sortedData = [...data].sort((left, right) => left.time - right.time);
+    const n = sortedData.length;
+    const summary = SingleSeriesAnalyzer.summarize(sortedData, name);
 
     // Rule 1: Not enough data for advanced feature extraction
-    if (n < 5) return SingleSeriesAnalyzer.generateRawDataNarrative(data, name);
+    if (n < 5) return SingleSeriesAnalyzer.generateRawDataNarrative(sortedData, name);
 
-    const values = data.map((d) => d.value);
+    const values = sortedData.map((d) => d.value);
 
     // Rule 2: Detect periodicity (Dominant Period)
-    const maxLag = Math.floor(n / 3);
-    const periodResult = MathUtility.detectDominantPeriod(values, maxLag);
+    const periodResult = summary.dominantPeriods.length > 0
+      ? { isPeriodic: true, period: summary.dominantPeriods[0] }
+      : MathUtility.detectDominantPeriod(values, Math.floor(n / 3));
 
     let sb = `Dynamic Behavior and Trajectory Analysis Report for [${name}]:\n\n`;
+    if (summary.qualityIssues.length > 0) {
+      sb += `[Data Quality Gate]\n`;
+      for (const issue of summary.qualityIssues) {
+        sb += `- ${issue.severity.toUpperCase()}: ${issue.message}\n`;
+      }
+      sb += '\n';
+    }
+
+    sb += `[Series Characterization]\n`;
+    sb += `- Samples: ${summary.sampleCount}`;
+    if (summary.duration !== undefined) {
+      sb += `, Duration: ${summary.duration} time units`;
+    }
+    sb += `\n- Trend Regime: ${summary.trend}\n`;
+    sb += `- Volatility Regime: ${summary.volatility}\n`;
+    if (summary.dominantPeriods.length > 0) {
+      sb += `- Candidate Periods: ${summary.dominantPeriods.join(', ')} observation points\n\n`;
+    } else {
+      sb += `- Candidate Periods: none with sufficient confidence\n\n`;
+    }
 
     if (periodResult.isPeriodic && periodResult.period! >= 4) {
       // Rule 3: Periodic
@@ -34,7 +96,7 @@ export class SingleSeriesAnalyzer {
     } else {
       // Rule 4: Non-periodic
       sb += `1. Periodicity Conclusion: No distinct fixed repetitive cycles were detected. Advanced global trajectory analysis follows:\n\n`;
-      sb += SingleSeriesAnalyzer.generateAdvancedTrajectoryNarrative(data, name) + '\n';
+      sb += SingleSeriesAnalyzer.generateAdvancedTrajectoryNarrative(sortedData, name) + '\n';
     }
 
     return sb;
@@ -60,7 +122,8 @@ export class SingleSeriesAnalyzer {
     const segments = MathUtility.piecewiseLinearApproximation(values, 8);
 
     // 3. Landmarks (Z-Score)
-    const peaks = MathUtility.zScorePeakDetection(values, Math.min(30, Math.floor(n / 5)), 3.5, 0.1);
+    const peakLag = Math.max(2, Math.min(30, Math.floor(n / 5)));
+    const peaks = MathUtility.zScorePeakDetection(values, peakLag, 3.5, 0.1);
 
     const vMin = min(values);
     const vMax = max(values);

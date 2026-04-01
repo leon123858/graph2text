@@ -1,8 +1,13 @@
+import { DatasetAnalyzer } from './analyzers/datasetAnalyzer.js';
 import { SingleSeriesAnalyzer } from './analyzers/singleSeriesAnalyzer.js';
 import { MultiSeriesAnalyzer } from './analyzers/multiSeriesAnalyzer.js';
-import { TimePoint } from './types.js';
+import { DatasetAnalysisResult, DatasetRow, TimePoint } from './types.js';
 
 export class SemanticFeatureEngine {
+  public static analyzeDataset(rows: DatasetRow[]): DatasetAnalysisResult {
+    return DatasetAnalyzer.process(rows);
+  }
+
   public static analyzeSingle(data: TimePoint[], name?: string): string {
     const fallbackName = name ?? 'Unknown Metric';
     if (!data || data.length === 0) {
