@@ -1,14 +1,30 @@
 import { min, max, mean } from 'simple-statistics';
+import { FeatureCardCalibrator } from '../pipeline/featureCardCalibrator.js';
+import { MetricSemantics } from '../pipeline/metricSemantics.js';
+import { SeriesFeaturePipeline } from '../pipeline/seriesFeaturePipeline.js';
 import { MathUtility } from '../utils/mathUtility.js';
-import { SeriesFeatureSummary, TimePoint } from '../types.js';
+import { FeatureCard, FieldRole, FindingItem, SeriesAnalysisResult, SeriesFeatureSummary, TimePoint } from '../types.js';
 
 export class SingleSeriesAnalyzer {
-  public static summarize(data: TimePoint[], name: string): SeriesFeatureSummary {
-    const sortedData = [...data].sort((left, right) => left.time - right.time);
+  public static analyze(data: TimePoint[], name: string, role?: FieldRole): SeriesAnalysisResult {
+    const summary = SingleSeriesAnalyzer.summarize(data, name, role);
+    const featureCards = FeatureCardCalibrator.calibrate(SingleSeriesAnalyzer.buildFeatureCards(summary));
+    const narrative = SingleSeriesAnalyzer.process(data, name, role);
+    return { summary, featureCards, narrative };
+  }
+
+  public static summarize(data: TimePoint[], name: string, role?: FieldRole): SeriesFeatureSummary {
+    const sortedData = MetricSemantics.sortTelemetryPoints(data);
+    const metricMode = MetricSemantics.inferMetricMode(name, role);
+    const metricSubtype = MetricSemantics.inferMetricSubtype(name, role);
     const values = sortedData.map((d) => d.value);
     const dominantPeriods = MathUtility.detectCandidatePeriods(values, Math.floor(values.length / 3));
     const anomalies = MathUtility.zScorePeakDetection(values, Math.min(30, Math.max(5, Math.floor(values.length / 5))), 3.5, 0.1);
     const qualityIssues = MathUtility.assessSeriesQuality(sortedData);
+    const regimes = SeriesFeaturePipeline.extractRegimes(sortedData);
+    const counterFeatures = role === 'counter' ? SeriesFeaturePipeline.extractCounterFeatures(sortedData) : undefined;
+    const dynamicFeatures = metricMode === 'dynamic' ? SeriesFeaturePipeline.extractDynamicFeatures(sortedData) : undefined;
+    const batteryFeatures = metricMode === 'battery' ? SeriesFeaturePipeline.extractBatteryFeatures(sortedData) : undefined;
 
     let positiveMoves = 0;
     let negativeMoves = 0;
@@ -32,20 +48,28 @@ export class SingleSeriesAnalyzer {
 
     return {
       name,
+      role,
+      metricMode,
+      metricSubtype,
       sampleCount: sortedData.length,
       duration: sortedData.length > 1 ? sortedData[sortedData.length - 1].time - sortedData[0].time : undefined,
       dominantPeriods,
       trend,
       volatility,
       anomalies,
+      regimes,
+      counterFeatures,
+      dynamicFeatures,
+      batteryFeatures,
       qualityIssues,
     };
   }
 
-  public static process(data: TimePoint[], name: string): string {
-    const sortedData = [...data].sort((left, right) => left.time - right.time);
+  public static process(data: TimePoint[], name: string, role?: FieldRole): string {
+    const sortedData = MetricSemantics.sortTelemetryPoints(data);
     const n = sortedData.length;
-    const summary = SingleSeriesAnalyzer.summarize(sortedData, name);
+    const summary = SingleSeriesAnalyzer.summarize(sortedData, name, role);
+    const analysisMode = SeriesFeaturePipeline.chooseAnalysisMode(role);
 
     // Rule 1: Not enough data for advanced feature extraction
     if (n < 5) return SingleSeriesAnalyzer.generateRawDataNarrative(sortedData, name);
@@ -73,10 +97,23 @@ export class SingleSeriesAnalyzer {
     }
     sb += `\n- Trend Regime: ${summary.trend}\n`;
     sb += `- Volatility Regime: ${summary.volatility}\n`;
+    sb += `- Analysis Mode: ${analysisMode}\n`;
+    sb += `- Metric Semantics: ${MetricSemantics.describeMetricMode(summary.metricMode ?? 'generic')}\n`;
     if (summary.dominantPeriods.length > 0) {
       sb += `- Candidate Periods: ${summary.dominantPeriods.join(', ')} observation points\n\n`;
     } else {
       sb += `- Candidate Periods: none with sufficient confidence\n\n`;
+    }
+
+    sb += SingleSeriesAnalyzer.generateRegimeNarrative(summary);
+    if (summary.counterFeatures) {
+      sb += SingleSeriesAnalyzer.generateCounterNarrative(summary);
+    }
+    if (summary.dynamicFeatures) {
+      sb += SingleSeriesAnalyzer.generateDynamicNarrative(summary);
+    }
+    if (summary.batteryFeatures) {
+      sb += SingleSeriesAnalyzer.generateBatteryNarrative(summary);
     }
 
     if (periodResult.isPeriodic && periodResult.period! >= 4) {
@@ -100,6 +137,129 @@ export class SingleSeriesAnalyzer {
     }
 
     return sb;
+  }
+
+  public static buildFeatureCards(summary: SeriesFeatureSummary): FeatureCard[] {
+    const cards: FeatureCard[] = [];
+
+    cards.push({
+      kind: 'trend',
+      title: 'Global Trend',
+      confidence: 0.85,
+      summary: `${summary.name} is ${summary.trend} with ${summary.volatility} volatility.`,
+      evidence: [
+        `sample_count=${summary.sampleCount}`,
+        `metric_mode=${summary.metricMode ?? 'generic'}`,
+        `metric_subtype=${summary.metricSubtype ?? 'generic'}`,
+        `regime_count=${summary.regimes.length}`,
+      ],
+    });
+
+    if (summary.dominantPeriods.length > 0) {
+      const periodConfidence = summary.dominantPeriods[0] >= 6 ? 0.62 : 0.25;
+      if (periodConfidence >= 0.5) {
+        cards.push({
+          kind: 'periodicity',
+          title: 'Candidate Periodicity',
+          confidence: periodConfidence,
+          summary: `Possible repeating structure at ${summary.dominantPeriods.join(', ')} samples.`,
+          evidence: summary.dominantPeriods.map((period) => `period=${period}`),
+        });
+      }
+    }
+
+    if (summary.regimes.length > 0) {
+      const leadingRegime = summary.regimes[0];
+      cards.push({
+        kind: 'regime',
+        title: 'Primary Regime',
+        confidence: 0.8,
+        summary: `${leadingRegime.regime} / ${leadingRegime.volatility} regime from ${leadingRegime.startTime} to ${leadingRegime.endTime}.`,
+        evidence: [
+          `mean=${leadingRegime.meanValue.toFixed(3)}`,
+          `slope=${leadingRegime.slope.toFixed(6)}`,
+        ],
+      });
+    }
+
+    if (summary.anomalies.length > 0) {
+      const anomaly = [...summary.anomalies].sort((a, b) => b.score - a.score)[0];
+      cards.push({
+        kind: 'anomaly',
+        title: 'Top Anomaly',
+        confidence: Math.min(0.99, 0.45 + anomaly.score / 10),
+        summary: `${anomaly.type} anomaly near index ${anomaly.index} with score ${anomaly.score.toFixed(1)}.`,
+        evidence: [
+          `value=${anomaly.value.toFixed(3)}`,
+          `score=${anomaly.score.toFixed(3)}`,
+        ],
+      });
+    }
+
+    if (summary.counterFeatures) {
+      cards.push({
+        kind: 'counter',
+        title: 'Counter Behavior',
+        confidence: 0.95,
+        summary: `Counter increased ${summary.counterFeatures.totalIncrease.toFixed(1)} with ${summary.counterFeatures.resets} resets.`,
+        evidence: [
+          `total_increase=${summary.counterFeatures.totalIncrease.toFixed(3)}`,
+          `resets=${summary.counterFeatures.resets}`,
+          `plateau_ratio=${summary.counterFeatures.plateauRatio.toFixed(3)}`,
+        ],
+      });
+    }
+
+    if (summary.dynamicFeatures) {
+      cards.push({
+        kind: 'dynamic',
+        title: 'Dynamic Activity',
+        confidence: 0.78,
+        summary: `${summary.dynamicFeatures.surgeCount} surges and ${summary.dynamicFeatures.brakingCount} braking events detected.`,
+        evidence: [
+          `stop_ratio=${summary.dynamicFeatures.stopRatio.toFixed(3)}`,
+          `cruise_ratio=${summary.dynamicFeatures.cruiseRatio.toFixed(3)}`,
+          `peak=${summary.dynamicFeatures.peakValue.toFixed(3)}`,
+        ],
+      });
+    }
+
+    if (summary.batteryFeatures) {
+      cards.push({
+        kind: 'battery',
+        title: 'Battery State',
+        confidence: 0.82,
+        summary: `Net change ${summary.batteryFeatures.netChange.toFixed(2)} with ${summary.batteryFeatures.dischargeSteps} discharge steps and ${summary.batteryFeatures.rechargeSteps} recharge steps.`,
+        evidence: [
+          `net_change=${summary.batteryFeatures.netChange.toFixed(3)}`,
+          `recovery_events=${summary.batteryFeatures.recoveryEvents}`,
+          `low_band_ratio=${summary.batteryFeatures.lowBandRatio.toFixed(3)}`,
+        ],
+      });
+    }
+
+    for (const issue of summary.qualityIssues) {
+      cards.push({
+        kind: 'quality',
+        title: 'Data Quality Warning',
+        confidence: 1,
+        summary: issue.message,
+        evidence: [`severity=${issue.severity}`, `code=${issue.code}`],
+      });
+    }
+
+    return cards;
+  }
+
+  public static buildHighlights(summary: SeriesFeatureSummary): FindingItem[] {
+    return FeatureCardCalibrator.calibrate(SingleSeriesAnalyzer.buildFeatureCards(summary))
+      .filter((card) => card.kind !== 'quality' || summary.qualityIssues.length <= 2)
+      .slice(0, 5)
+      .map((card) => ({
+        label: card.title,
+        detail: card.summary,
+        severity: card.kind === 'quality' ? 'warning' : card.kind === 'anomaly' ? 'high' : 'info',
+      }));
   }
 
   private static generateRawDataNarrative(data: TimePoint[], name: string): string {
@@ -155,6 +315,52 @@ export class SingleSeriesAnalyzer {
       sb += `\n- No significant localized anomalies detected via Z-score analysis.\n`;
     }
 
+    return sb;
+  }
+
+  private static generateRegimeNarrative(summary: SeriesFeatureSummary): string {
+    if (summary.regimes.length === 0) {
+      return `[Regime Segmentation]\n- No stable regime segmentation could be produced.\n\n`;
+    }
+
+    let sb = `[Regime Segmentation]\n`;
+    const topRegimes = summary.regimes.slice(0, 6);
+    for (const [index, regime] of topRegimes.entries()) {
+      sb += `- Regime ${index + 1}: ${regime.regime} / ${regime.volatility} volatility from ${regime.startTime} to ${regime.endTime} (mean ${regime.meanValue.toFixed(1)}, slope ${regime.slope.toFixed(3)}).\n`;
+    }
+    sb += '\n';
+    return sb;
+  }
+
+  private static generateCounterNarrative(summary: SeriesFeatureSummary): string {
+    if (!summary.counterFeatures) return '';
+
+    let sb = `[Counter Behavior]\n`;
+    sb += `- Total increase observed: ${summary.counterFeatures.totalIncrease.toFixed(1)} units.\n`;
+    sb += `- Reset events detected: ${summary.counterFeatures.resets}.\n`;
+    sb += `- Plateau ratio: ${(summary.counterFeatures.plateauRatio * 100).toFixed(1)}% of steps were unchanged.\n\n`;
+    return sb;
+  }
+
+  private static generateDynamicNarrative(summary: SeriesFeatureSummary): string {
+    if (!summary.dynamicFeatures) return '';
+
+    let sb = `[Dynamic Signal Behavior]\n`;
+    sb += `- Stop ratio: ${(summary.dynamicFeatures.stopRatio * 100).toFixed(1)}% of samples stayed near zero.\n`;
+    sb += `- Cruise ratio: ${(summary.dynamicFeatures.cruiseRatio * 100).toFixed(1)}% of samples stayed in the high-load band.\n`;
+    sb += `- Surge events: ${summary.dynamicFeatures.surgeCount}, braking events: ${summary.dynamicFeatures.brakingCount}.\n`;
+    sb += `- Peak observed value: ${summary.dynamicFeatures.peakValue.toFixed(1)}.\n\n`;
+    return sb;
+  }
+
+  private static generateBatteryNarrative(summary: SeriesFeatureSummary): string {
+    if (!summary.batteryFeatures) return '';
+
+    let sb = `[Battery State Behavior]\n`;
+    sb += `- Net change across the session: ${summary.batteryFeatures.netChange.toFixed(2)} units.\n`;
+    sb += `- Discharge steps: ${summary.batteryFeatures.dischargeSteps}, recharge steps: ${summary.batteryFeatures.rechargeSteps}.\n`;
+    sb += `- Recovery events: ${summary.batteryFeatures.recoveryEvents}.\n`;
+    sb += `- Low-band occupancy: ${(summary.batteryFeatures.lowBandRatio * 100).toFixed(1)}% of samples stayed near the lower operating band.\n\n`;
     return sb;
   }
 

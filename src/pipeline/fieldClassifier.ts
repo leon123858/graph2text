@@ -113,7 +113,10 @@ function inferRole(fieldName: string, summary: NumericSummary, derivedFrom?: str
   if ((summary.uniqueCount <= 8 && (summary.integerRatio ?? 0) > 0.95) || /(state|mode|flag|status|gear|ign)/.test(normalizedName)) {
     return 'state';
   }
-  if ((summary.monotonicIncreaseRatio ?? 0) > 0.98 && (summary.zeroRatio ?? 0) < 0.95 && summary.uniqueCount > 16) {
+  if (
+    /(odo|odometer|mileage|counter|total|accum)/.test(normalizedName) ||
+    ((summary.monotonicIncreaseRatio ?? 0) > 0.98 && (summary.zeroRatio ?? 0) < 0.95 && summary.uniqueCount > 8)
+  ) {
     return 'counter';
   }
   if (summary.uniqueCount > 4) return 'continuous';

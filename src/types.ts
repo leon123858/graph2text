@@ -78,16 +78,130 @@ export interface DatasetProfile {
 export interface DatasetAnalysisResult {
   profile: DatasetProfile;
   narratives: string[];
+  findings: DatasetFinding[];
 }
+
+export interface FeatureCard {
+  kind:
+    | 'trend'
+    | 'periodicity'
+    | 'regime'
+    | 'anomaly'
+    | 'counter'
+    | 'dynamic'
+    | 'battery'
+    | 'correlation'
+    | 'lead_lag'
+    | 'event_coupling'
+    | 'windowed_stability'
+    | 'quality';
+  title: string;
+  confidence: number;
+  summary: string;
+  evidence: string[];
+}
+
+export interface SeriesAnalysisResult {
+  summary: SeriesFeatureSummary;
+  featureCards: FeatureCard[];
+  narrative: string;
+}
+
+export interface RelationAnalysisResult {
+  summary: RelationFeatureSummary;
+  featureCards: FeatureCard[];
+  narrative: string;
+}
+
+export interface LlmTextPayload {
+  text: string;
+  bulletLines: string[];
+}
+
+export interface PromptSchemaPayload {
+  observedFacts: string[];
+  highConfidenceFacts: string[];
+  uncertainFacts: string[];
+  doNotInfer: string[];
+  suggestedQuestions: string[];
+  text: string;
+}
+
+export interface FindingItem {
+  label: string;
+  detail: string;
+  severity?: 'info' | 'warning' | 'high';
+}
+
+export interface SeriesFinding {
+  metric: string;
+  role?: FieldRole;
+  metricMode?: MetricMode;
+  analysis: SeriesAnalysisResult;
+  highlights: FindingItem[];
+}
+
+export interface RelationFinding {
+  pair: [string, string];
+  analysis: RelationAnalysisResult;
+  highlights: FindingItem[];
+}
+
+export interface DatasetFinding {
+  sessionId: string;
+  rowCount: number;
+  startTime: number;
+  endTime: number;
+  seriesFindings: SeriesFinding[];
+  relationFinding?: RelationFinding;
+}
+
+export interface RegimeSegment {
+  startIndex: number;
+  endIndex: number;
+  startTime: number;
+  endTime: number;
+  startValue: number;
+  endValue: number;
+  meanValue: number;
+  slope: number;
+  volatility: 'low' | 'medium' | 'high';
+  regime: 'rising' | 'falling' | 'stable';
+}
+
+export type MetricMode = 'generic' | 'dynamic' | 'battery' | 'counter';
 
 export interface SeriesFeatureSummary {
   name: string;
+  role?: FieldRole;
+  metricMode?: MetricMode;
+  metricSubtype?: string;
   sampleCount: number;
   duration?: number;
   dominantPeriods: number[];
   trend: 'rising' | 'falling' | 'stable' | 'mixed';
   volatility: 'low' | 'medium' | 'high';
   anomalies: PeakSignal[];
+  regimes: RegimeSegment[];
+  counterFeatures?: {
+    totalIncrease: number;
+    resets: number;
+    plateauRatio: number;
+  };
+  dynamicFeatures?: {
+    stopRatio: number;
+    cruiseRatio: number;
+    surgeCount: number;
+    brakingCount: number;
+    peakValue: number;
+  };
+  batteryFeatures?: {
+    netChange: number;
+    dischargeSteps: number;
+    rechargeSteps: number;
+    recoveryEvents: number;
+    lowBandRatio: number;
+  };
   qualityIssues: DataQualityIssue[];
 }
 
@@ -99,6 +213,22 @@ export interface RelationFeatureSummary {
   bestLag: number;
   bestCorrelation: number;
   staticCorrelation: number;
+  metricModeA?: MetricMode;
+  metricModeB?: MetricMode;
+  metricSubtypeA?: string;
+  metricSubtypeB?: string;
+  eventCoupling?: {
+    triggerSeries: string;
+    responseSeries: string;
+    triggerCount: number;
+    alignedResponseRate: number;
+    avgResponseDelta: number;
+  };
+  windowedCorrelation?: {
+    strongestWindowCorrelation: number;
+    weakestWindowCorrelation: number;
+    stableWindowRatio: number;
+  };
   qualityIssues: DataQualityIssue[];
 }
 

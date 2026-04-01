@@ -4,6 +4,43 @@ import path, { join } from 'path';
 import { fileURLToPath } from 'url';
 import { SemanticFeatureEngine, DatasetRow, TimePoint } from '../../src/index.js';
 
+function escapeHtml(text: string): string {
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+function buildSessionId(row: DatasetRow, entityFields: string[], sessionFields: string[]): string {
+    const entityKey = entityFields.length > 0
+        ? entityFields.map((field) => String(row[field] ?? 'unknown')).join('|')
+        : 'global';
+    const sessionKey = sessionFields.length > 0
+        ? sessionFields.map((field) => String(row[field] ?? 'unknown')).join('|')
+        : 'global';
+    return `${entityKey}::${sessionKey}`;
+}
+
+function toTimePoints(rows: DatasetRow[], timestampField: string, metric: string): TimePoint[] {
+    return rows
+        .map((row) => {
+            const time = Number(row[timestampField]);
+            const value = Number(row[metric]);
+            return Number.isFinite(time) && Number.isFinite(value) ? { time, value } : undefined;
+        })
+        .filter((point): point is TimePoint => point !== undefined);
+}
+
+function downsample(points: TimePoint[], limit: number): TimePoint[] {
+    if (points.length <= limit) return points;
+    const step = Math.max(1, Math.ceil(points.length / limit));
+    const result: TimePoint[] = [];
+    for (let i = 0; i < points.length; i += step) {
+        result.push(points[i]);
+    }
+    return result;
+}
+
 async function validateRealTelemetryData() {
     const csvPath = join(process.cwd(), 'data', '01_raw_telemetry.csv');
     
@@ -61,8 +98,26 @@ async function validateRealTelemetryData() {
 
     console.log(`[Success] Parsed ${lineCount - 1} rows of telemetry data.\n`);
     const datasetResult = SemanticFeatureEngine.analyzeDataset(rows);
+    const datasetLlm = SemanticFeatureEngine.analyzeDatasetForLLM(rows);
+    const datasetPrompt = SemanticFeatureEngine.analyzeDatasetForPrompt(rows);
+    const sessionRowMap = new Map<string, DatasetRow[]>();
+    for (const row of rows) {
+        const sessionId = buildSessionId(
+            row,
+            datasetResult.profile.schema.entityFields,
+            datasetResult.profile.schema.sessionFields
+        );
+        const bucket = sessionRowMap.get(sessionId);
+        if (bucket) {
+            bucket.push(row);
+        } else {
+            sessionRowMap.set(sessionId, [row]);
+        }
+    }
     console.log(`[Dataset Summary]`);
     console.log(datasetResult.narratives[0]);
+    console.log(`\n[Dataset LLM Payload]\n${datasetLlm.text}\n`);
+    console.log(`[Dataset Prompt Payload]\n${datasetPrompt.text}\n`);
     
     // Prepare for integration processing
     const columnsToAnalyze = datasetResult.profile.fieldProfiles
@@ -121,6 +176,176 @@ async function validateRealTelemetryData() {
 
         const reportA = SemanticFeatureEngine.analyzeSingle(metricData[colA], colA);
         const reportB = SemanticFeatureEngine.analyzeSingle(metricData[colB], colB);
+        const llmA = SemanticFeatureEngine.analyzeSingleForLLM(metricData[colA], colA);
+        const llmB = SemanticFeatureEngine.analyzeSingleForLLM(metricData[colB], colB);
+        const relationLlm = SemanticFeatureEngine.analyzeRelationForLLM(metricData[colA], metricData[colB], colA, colB);
+        const promptA = SemanticFeatureEngine.analyzeSingleForPrompt(metricData[colA], colA);
+        const promptB = SemanticFeatureEngine.analyzeSingleForPrompt(metricData[colB], colB);
+        const relationPrompt = SemanticFeatureEngine.analyzeRelationForPrompt(metricData[colA], metricData[colB], colA, colB);
+        const topFinding = datasetResult.findings[0];
+        const reviewSections = datasetResult.findings.map((finding, index) => {
+            const sessionRows = sessionRowMap.get(finding.sessionId) ?? [];
+            const seriesForChart = finding.seriesFindings.slice(0, 3).map((seriesFinding) => {
+                const points = downsample(
+                    toTimePoints(sessionRows, datasetResult.profile.schema.timestampField, seriesFinding.metric),
+                    240
+                );
+                return {
+                    name: seriesFinding.metric,
+                    metricMode: seriesFinding.metricMode ?? 'generic',
+                    times: points.map((point) => point.time),
+                    values: points.map((point) => point.value),
+                    llm: SemanticFeatureEngine.analyzeSingleForLLM(
+                        toTimePoints(sessionRows, datasetResult.profile.schema.timestampField, seriesFinding.metric),
+                        seriesFinding.metric,
+                        seriesFinding.role
+                    ).text,
+                    prompt: SemanticFeatureEngine.analyzeSingleForPrompt(
+                        toTimePoints(sessionRows, datasetResult.profile.schema.timestampField, seriesFinding.metric),
+                        seriesFinding.metric,
+                        seriesFinding.role
+                    ).text,
+                };
+            });
+
+            const sessionRelation = finding.relationFinding
+                ? {
+                    pair: finding.relationFinding.pair,
+                    llm: SemanticFeatureEngine.analyzeRelationForLLM(
+                        toTimePoints(sessionRows, datasetResult.profile.schema.timestampField, finding.relationFinding.pair[0]),
+                        toTimePoints(sessionRows, datasetResult.profile.schema.timestampField, finding.relationFinding.pair[1]),
+                        finding.relationFinding.pair[0],
+                        finding.relationFinding.pair[1]
+                    ).text,
+                    prompt: SemanticFeatureEngine.analyzeRelationForPrompt(
+                        toTimePoints(sessionRows, datasetResult.profile.schema.timestampField, finding.relationFinding.pair[0]),
+                        toTimePoints(sessionRows, datasetResult.profile.schema.timestampField, finding.relationFinding.pair[1]),
+                        finding.relationFinding.pair[0],
+                        finding.relationFinding.pair[1]
+                    ).text,
+                }
+                : undefined;
+
+            const metricCards = finding.seriesFindings.map((seriesFinding) => {
+                const highlights = seriesFinding.highlights
+                    .map((item) => `<li><strong>${escapeHtml(item.label)}:</strong> ${escapeHtml(item.detail)}</li>`)
+                    .join('');
+                const featureCards = seriesFinding.analysis.featureCards
+                    .slice(0, 4)
+                    .map((card) => `<li><strong>${escapeHtml(card.title)}:</strong> ${escapeHtml(card.summary)} <em>(confidence ${card.confidence.toFixed(2)})</em></li>`)
+                    .join('');
+
+                return `<div class="finding-card">
+                    <div class="finding-header">
+                        <span class="badge badge-a">${escapeHtml(seriesFinding.metricMode ?? 'generic')}</span>
+                        <span class="report-title">${escapeHtml(seriesFinding.metric)}</span>
+                    </div>
+                    <ul class="highlights">${highlights}</ul>
+                    <div class="facts-title">Feature Cards</div>
+                    <ul class="highlights">${featureCards}</ul>
+                    <div class="facts-title">LLM Payload</div>
+                    <div class="llm-block">${escapeHtml(seriesForChart.find((item) => item.name === seriesFinding.metric)?.llm ?? '')}</div>
+                    <div class="facts-title">Prompt Schema</div>
+                    <div class="llm-block">${escapeHtml(seriesForChart.find((item) => item.name === seriesFinding.metric)?.prompt ?? '')}</div>
+                </div>`;
+            }).join('');
+
+            const relationCard = finding.relationFinding
+                ? `<div class="finding-card wide">
+                    <div class="finding-header">
+                        <span class="badge badge-relation">relation</span>
+                        <span class="report-title">${escapeHtml(finding.relationFinding.pair.join(' <-> '))}</span>
+                    </div>
+                    <ul class="highlights">
+                        ${finding.relationFinding.highlights.map((item) => `<li><strong>${escapeHtml(item.label)}:</strong> ${escapeHtml(item.detail)}</li>`).join('')}
+                    </ul>
+                    <div class="facts-title">Relation Cards</div>
+                    <ul class="highlights">
+                        ${finding.relationFinding.analysis.featureCards.slice(0, 4).map((card) => `<li><strong>${escapeHtml(card.title)}:</strong> ${escapeHtml(card.summary)} <em>(confidence ${card.confidence.toFixed(2)})</em></li>`).join('')}
+                    </ul>
+                    <div class="facts-title">LLM Payload</div>
+                    <div class="llm-block">${escapeHtml(sessionRelation?.llm ?? '')}</div>
+                    <div class="facts-title">Prompt Schema</div>
+                    <div class="llm-block">${escapeHtml(sessionRelation?.prompt ?? '')}</div>
+                </div>`
+                : '';
+
+            const checklist = `
+                <ul class="review-list">
+                    <li>Check whether major rises/falls in the chart appear in the feature cards.</li>
+                    <li>Check whether the LLM payload omits weak or noisy claims.</li>
+                    <li>Check whether relation claims match visible lag/coupling in the plotted traces.</li>
+                    <li>Check whether the prompt schema clearly separates high-confidence facts from uncertain ones.</li>
+                </ul>
+            `;
+
+            return {
+                chartId: `session-chart-${index}`,
+                titleHtml: `<section class="review-section">
+                    <div class="session-header">
+                        <h2>${escapeHtml(finding.sessionId)}</h2>
+                        <p>${finding.rowCount} rows | ${finding.startTime} -> ${finding.endTime}</p>
+                    </div>
+                    <div class="review-note">
+                        <strong>Human Review Checklist</strong>
+                        ${checklist}
+                    </div>
+                    <div class="main-card">
+                        <div id="session-chart-${index}" class="session-chart"></div>
+                    </div>
+                    <div class="finding-grid">${metricCards}${relationCard}</div>
+                </section>`,
+                chartData: {
+                    chartId: `session-chart-${index}`,
+                    series: seriesForChart,
+                },
+            };
+        });
+        const sessionCards = datasetResult.findings.map((finding) => {
+            const seriesCards = finding.seriesFindings.map((seriesFinding) => {
+                const highlights = seriesFinding.highlights
+                    .map((item) => `<li><strong>${escapeHtml(item.label)}:</strong> ${escapeHtml(item.detail)}</li>`)
+                    .join('');
+                const featureCards = seriesFinding.analysis.featureCards
+                    .slice(0, 4)
+                    .map((card) => `<li><strong>${escapeHtml(card.title)}:</strong> ${escapeHtml(card.summary)} <em>(confidence ${card.confidence.toFixed(2)})</em></li>`)
+                    .join('');
+
+                return `<div class="finding-card">
+                    <div class="finding-header">
+                        <span class="badge badge-a">${escapeHtml(seriesFinding.metricMode ?? 'generic')}</span>
+                        <span class="report-title">${escapeHtml(seriesFinding.metric)}</span>
+                    </div>
+                    <ul class="highlights">${highlights}</ul>
+                    <div class="facts-title">Feature Cards</div>
+                    <ul class="highlights">${featureCards}</ul>
+                </div>`;
+            }).join('');
+
+            const relationCard = finding.relationFinding
+                ? `<div class="finding-card wide">
+                    <div class="finding-header">
+                        <span class="badge badge-relation">relation</span>
+                        <span class="report-title">${escapeHtml(finding.relationFinding.pair.join(' <-> '))}</span>
+                    </div>
+                    <ul class="highlights">
+                        ${finding.relationFinding.highlights.map((item) => `<li><strong>${escapeHtml(item.label)}:</strong> ${escapeHtml(item.detail)}</li>`).join('')}
+                    </ul>
+                    <div class="facts-title">Relation Cards</div>
+                    <ul class="highlights">
+                        ${finding.relationFinding.analysis.featureCards.slice(0, 4).map((card) => `<li><strong>${escapeHtml(card.title)}:</strong> ${escapeHtml(card.summary)} <em>(confidence ${card.confidence.toFixed(2)})</em></li>`).join('')}
+                    </ul>
+                </div>`
+                : '';
+
+            return `<section class="session-section">
+                <div class="session-header">
+                    <h2>${escapeHtml(finding.sessionId)}</h2>
+                    <p>${finding.rowCount} rows | ${finding.startTime} -> ${finding.endTime}</p>
+                </div>
+                <div class="finding-grid">${seriesCards}${relationCard}</div>
+            </section>`;
+        }).join('');
 
         const htmlContent = `<!DOCTYPE html>
 <html lang="en">
@@ -200,10 +425,51 @@ async function validateRealTelemetryData() {
             height: 600px; 
         }
 
+        .session-chart {
+            width: 100%;
+            height: 420px;
+        }
+
         .reports-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
             gap: 24px;
+        }
+
+        .session-section {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .review-section {
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        .review-note {
+            background: rgba(15, 23, 42, 0.45);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 18px;
+            color: #dbeafe;
+        }
+
+        .review-list {
+            margin: 12px 0 0;
+            padding-left: 18px;
+            line-height: 1.7;
+        }
+
+        .session-header h2 {
+            margin: 0;
+            font-size: 1.4rem;
+        }
+
+        .session-header p {
+            margin: 6px 0 0;
+            color: var(--text-secondary);
         }
 
         .report-card {
@@ -220,12 +486,36 @@ async function validateRealTelemetryData() {
             grid-column: 1 / -1;
         }
 
+        .finding-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 18px;
+        }
+
+        .finding-card {
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 20px;
+        }
+
+        .finding-card.wide {
+            grid-column: 1 / -1;
+        }
+
         .report-header {
             display: flex;
             align-items: center;
             gap: 12px;
             border-bottom: 1px solid var(--border-color);
             padding-bottom: 12px;
+        }
+
+        .finding-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 14px;
         }
 
         .badge {
@@ -254,6 +544,52 @@ async function validateRealTelemetryData() {
             color: #cbd5e1;
         }
 
+        .llm-block {
+            background: rgba(2, 6, 23, 0.7);
+            border: 1px solid rgba(56, 189, 248, 0.18);
+            border-radius: 14px;
+            padding: 18px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.88rem;
+            white-space: pre-wrap;
+            line-height: 1.6;
+            color: #dbeafe;
+        }
+
+        .highlights {
+            margin: 0;
+            padding-left: 18px;
+            color: #cbd5e1;
+            line-height: 1.7;
+        }
+
+        .facts-title {
+            margin-top: 14px;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-secondary);
+        }
+
+        .summary-panel {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 18px;
+        }
+
+        .summary-tile {
+            background: rgba(15, 23, 42, 0.45);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 18px;
+        }
+
+        .summary-tile strong {
+            display: block;
+            font-size: 1.5rem;
+            margin-bottom: 6px;
+        }
+
         footer {
             margin-top: 40px;
             text-align: center;
@@ -275,9 +611,48 @@ async function validateRealTelemetryData() {
             <div class="subtitle">Validating library analysis on real-world telemetry data</div>
         </header>
 
+        <div class="summary-panel">
+            <div class="summary-tile">
+                <strong>${datasetResult.profile.sessions.length}</strong>
+                Sessions detected
+            </div>
+            <div class="summary-tile">
+                <strong>${datasetResult.profile.fieldProfiles.length}</strong>
+                Fields profiled
+            </div>
+            <div class="summary-tile">
+                <strong>${datasetResult.findings.length}</strong>
+                Session reports rendered
+            </div>
+            <div class="summary-tile">
+                <strong>${columnsToAnalyze.length}</strong>
+                Metrics selected
+            </div>
+        </div>
+
+        <div class="report-card">
+            <div class="report-header">
+                <span class="badge badge-relation">LLM Payload</span>
+                <span class="report-title">Dataset-Level Graph2Text Output</span>
+            </div>
+            <div class="llm-block">${escapeHtml(datasetLlm.text)}</div>
+            <div class="facts-title">Prompt Schema</div>
+            <div class="llm-block">${escapeHtml(datasetPrompt.text)}</div>
+        </div>
+
         <div class="main-card">
             <div id="chart"></div>
         </div>
+
+        <section class="review-section">
+            <div class="session-header">
+                <h2>Session Review Workspace</h2>
+                <p>These charts are the primary human-validation surface: compare raw traces against feature cards, LLM payloads, and prompt schema outputs.</p>
+            </div>
+            ${reviewSections.map((section) => section.titleHtml).join('')}
+        </section>
+
+        ${sessionCards}
 
         <div class="reports-grid">
             <div class="report-card">
@@ -285,7 +660,10 @@ async function validateRealTelemetryData() {
                     <span class="badge badge-a">Metric A</span>
                     <span class="report-title">${colA}</span>
                 </div>
-                <div class="narrative">${reportA.replace(/</g, "&lt;")}</div>
+                <div class="llm-block">${escapeHtml(llmA.text)}</div>
+                <div class="facts-title">Prompt Schema</div>
+                <div class="llm-block">${escapeHtml(promptA.text)}</div>
+                <div class="narrative">${escapeHtml(reportA)}</div>
             </div>
 
             <div class="report-card">
@@ -293,7 +671,10 @@ async function validateRealTelemetryData() {
                     <span class="badge badge-b">Metric B</span>
                     <span class="report-title">${colB}</span>
                 </div>
-                <div class="narrative">${reportB.replace(/</g, "&lt;")}</div>
+                <div class="llm-block">${escapeHtml(llmB.text)}</div>
+                <div class="facts-title">Prompt Schema</div>
+                <div class="llm-block">${escapeHtml(promptB.text)}</div>
+                <div class="narrative">${escapeHtml(reportB)}</div>
             </div>
 
             <div class="report-card wide">
@@ -301,18 +682,22 @@ async function validateRealTelemetryData() {
                     <span class="badge badge-relation">Relational Analysis</span>
                     <span class="report-title">Inter-series Correlation</span>
                 </div>
-                <div class="narrative">${relationReport.replace(/</g, "&lt;")}</div>
+                <div class="llm-block">${escapeHtml(relationLlm.text)}</div>
+                <div class="facts-title">Prompt Schema</div>
+                <div class="llm-block">${escapeHtml(relationPrompt.text)}</div>
+                <div class="narrative">${escapeHtml(relationReport)}</div>
             </div>
         </div>
 
         <footer>
-            Parsed ${dataA.length} data points. Visualization downsampled to ~${plotLimit} points using step ${step}.
+            Parsed ${dataA.length} data points. Visualization downsampled to ~${plotLimit} points using step ${step}. Top session: ${escapeHtml(topFinding?.sessionId ?? 'n/a')}.
         </footer>
     </div>
 
     <script>
         const chartDom = document.getElementById('chart');
         const myChart = echarts.init(chartDom, 'dark');
+        const reviewCharts = ${JSON.stringify(reviewSections.map((section) => section.chartData))};
         
         const option = {
             backgroundColor: 'transparent',
@@ -415,6 +800,50 @@ async function validateRealTelemetryData() {
             ]
         };
         myChart.setOption(option);
+
+        reviewCharts.forEach((reviewChart) => {
+            const target = document.getElementById(reviewChart.chartId);
+            if (!target) return;
+            const chart = echarts.init(target, 'dark');
+            const baseTimes = reviewChart.series[0]?.times ?? [];
+            chart.setOption({
+                backgroundColor: 'transparent',
+                animation: false,
+                tooltip: { trigger: 'axis' },
+                legend: {
+                    top: 0,
+                    textStyle: { color: '#94a3b8', fontFamily: 'Inter' },
+                    data: reviewChart.series.map((item) => item.name)
+                },
+                grid: { left: '4%', right: '4%', bottom: '12%', containLabel: true },
+                dataZoom: [
+                    { type: 'inside', start: 0, end: 100 },
+                    { start: 0, end: 100 }
+                ],
+                xAxis: {
+                    type: 'category',
+                    data: baseTimes,
+                    axisLine: { lineStyle: { color: '#475569' } }
+                },
+                yAxis: {
+                    type: 'value',
+                    axisLine: { lineStyle: { color: '#475569' } },
+                    splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.15)' } }
+                },
+                series: reviewChart.series.map((item, idx) => ({
+                    name: item.name,
+                    type: 'line',
+                    data: item.values,
+                    showSymbol: false,
+                    smooth: false,
+                    lineStyle: { width: 2 },
+                    emphasis: { focus: 'series' }
+                }))
+            });
+            window.addEventListener('resize', function() {
+                chart.resize();
+            });
+        });
         
         window.addEventListener('resize', function() {
             myChart.resize();

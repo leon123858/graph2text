@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { MultiSeriesAnalyzer } from '../analyzers/multiSeriesAnalyzer.js';
+import { SemanticFeatureEngine } from '../index.js';
 import { TimePoint } from '../types.js';
 
 describe('MultiSeriesAnalyzer', () => {
@@ -82,5 +83,57 @@ describe('MultiSeriesAnalyzer', () => {
         expect(output).toContain("No significant static synchronization");
         expect(output).toContain("Highly correlated after phase shift!");
         expect(output).toMatch(/Phase-Shifted Pearson: 0\.99|Phase-Shifted Pearson: 1\.00/);
+    });
+
+    it('reports telemetry event coupling for trigger-response style signals', () => {
+        const dataA: TimePoint[] = [
+            { time: 0, value: 0 },
+            { time: 1, value: 0 },
+            { time: 2, value: 10 },
+            { time: 3, value: 0 },
+            { time: 4, value: 12 },
+            { time: 5, value: 0 },
+            { time: 6, value: 14 },
+            { time: 7, value: 0 }
+        ];
+        const dataB: TimePoint[] = [
+            { time: 0, value: 50 },
+            { time: 1, value: 50 },
+            { time: 2, value: 50 },
+            { time: 3, value: 48 },
+            { time: 4, value: 48 },
+            { time: 5, value: 45 },
+            { time: 6, value: 45 },
+            { time: 7, value: 41 }
+        ];
+
+        const output = MultiSeriesAnalyzer.process(dataA, dataB, 'EVVSP', 'EVSOC');
+        expect(output).toContain('[Telemetry Event Coupling]');
+        expect(output).toContain('Trigger series');
+        expect(output).toContain('Response series');
+        expect(output).toContain('[Windowed Relation Stability]');
+        expect(output).toContain('[Metric Semantics]');
+    });
+
+    it('suppresses weak relation cards in structured output', () => {
+        const dataA: TimePoint[] = [
+            { time: 0, value: 1 },
+            { time: 1, value: 2 },
+            { time: 2, value: 1 },
+            { time: 3, value: 2 },
+            { time: 4, value: 1 },
+            { time: 5, value: 2 }
+        ];
+        const dataB: TimePoint[] = [
+            { time: 0, value: 10 },
+            { time: 1, value: 10.1 },
+            { time: 2, value: 10 },
+            { time: 3, value: 10.1 },
+            { time: 4, value: 10 },
+            { time: 5, value: 10.1 }
+        ];
+
+        const result = SemanticFeatureEngine.analyzeRelationStructured(dataA, dataB, 'EVVSP', 'EVBATV');
+        expect(result.featureCards.some((card) => card.kind === 'windowed_stability')).toBe(false);
     });
 });
