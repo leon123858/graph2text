@@ -57,11 +57,58 @@ export class MathUtility {
   }
 
   public static calculateCrossCorrelation(a: number[], b: number[], maxLag: number): LagResult {
-    const n = a.length;
-    let bestLag = 0;
-    let maxCorr = 0;
+    const n = Math.min(a.length, b.length);
+    if (n < 4) return { bestLag: 0, bestCorrelation: 0 };
+    
+    // Variance check to prevent division by zero in correlation
+    if (variance(a) === 0 || variance(b) === 0) return { bestLag: 0, bestCorrelation: 0 };
 
-    for (let lag = -maxLag; lag <= maxLag; lag++) {
+    let step = 1;
+    let downA = a;
+    let downB = b;
+    if (n > 2000) {
+      step = Math.floor(n / 1000);
+      downA = a.filter((_, i) => i % step === 0);
+      downB = b.filter((_, i) => i % step === 0);
+    }
+
+    const downN = downA.length;
+    const roughMaxLag = Math.min(Math.floor(downN / 3), Math.floor(maxLag / step));
+
+    let bestRoughLag = 0;
+    let maxRoughCorr = 0;
+
+    for (let lag = -roughMaxLag; lag <= roughMaxLag; lag++) {
+      let shiftedA: number[];
+      let shiftedB: number[];
+
+      if (lag < 0) {
+        shiftedA = downA.slice(-lag);
+        shiftedB = downB.slice(0, downN + lag);
+      } else {
+        shiftedA = downA.slice(0, downN - lag);
+        shiftedB = downB.slice(lag);
+      }
+
+      if (shiftedA.length > 3) {
+        if (variance(shiftedA) === 0 || variance(shiftedB) === 0) continue;
+        const r = sampleCorrelation(shiftedA, shiftedB);
+        if (Math.abs(r) > Math.abs(maxRoughCorr)) {
+          maxRoughCorr = r;
+          bestRoughLag = lag;
+        }
+      }
+    }
+
+    // Narrow down on original array
+    const approxLag = bestRoughLag * step;
+    let bestFinalLag = 0;
+    let maxFinalCorr = 0;
+
+    const searchStart = Math.max(-maxLag, approxLag - step - 1);
+    const searchEnd = Math.min(maxLag, approxLag + step + 1);
+
+    for (let lag = searchStart; lag <= searchEnd; lag++) {
       let shiftedA: number[];
       let shiftedB: number[];
 
@@ -74,18 +121,16 @@ export class MathUtility {
       }
 
       if (shiftedA.length > 3) {
-        // Prevent math errors with variance = 0
         if (variance(shiftedA) === 0 || variance(shiftedB) === 0) continue;
-        
         const r = sampleCorrelation(shiftedA, shiftedB);
-        if (Math.abs(r) > Math.abs(maxCorr)) {
-          maxCorr = r;
-          bestLag = lag;
+        if (Math.abs(r) > Math.abs(maxFinalCorr)) {
+          maxFinalCorr = r;
+          bestFinalLag = lag;
         }
       }
     }
 
-    return { bestLag, bestCorrelation: maxCorr };
+    return { bestLag: bestFinalLag, bestCorrelation: maxFinalCorr };
   }
 
   public static calculateDifferencesStdDev(values: number[]): number {

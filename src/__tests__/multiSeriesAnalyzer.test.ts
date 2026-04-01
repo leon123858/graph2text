@@ -13,7 +13,7 @@ describe('MultiSeriesAnalyzer', () => {
         }
 
         const output = MultiSeriesAnalyzer.process(dataA, dataB, 'A', 'B');
-        expect(output).toContain("Highly positive correlation (Moving together)");
+        expect(output).toContain("Highly positive static correlation (Moving together concurrently)");
         // Since they are identical noise or very similar, Pearson is close to 1.00
         expect(output).toMatch(/Pearson Coefficient: 0\.99|Pearson Coefficient: 1\.00/);
     });
@@ -28,7 +28,7 @@ describe('MultiSeriesAnalyzer', () => {
         }
 
         const output = MultiSeriesAnalyzer.process(dataA, dataB, 'A', 'B');
-        expect(output).toContain("Highly negative correlation (Inverse relationship)");
+        expect(output).toContain("Highly negative static correlation (Inverse concurrent relationship)");
         expect(output).toContain("Pearson Coefficient: -1.00");
     });
 
@@ -46,9 +46,8 @@ describe('MultiSeriesAnalyzer', () => {
 
         const output = MultiSeriesAnalyzer.process(dataA, dataB, 'ValA', 'ValB');
         expect(output).toContain("Significant causal phenomenon detected");
-        expect(output).toContain("[ValB] acts as the leading indicator. Following its shifts, [ValA] accurately tracks the changes");
-        // 5 ticks exact
-        expect(output).toContain("with a delay of 5 time units.");
+        expect(output).toContain("[ValB] acts as the leading indicator");
+        expect(output).toContain("accurately tracks the structural changes with a delay/lag of 5 time units.");
     });
 
     it('detects and counts precise value intersections', () => {
@@ -65,7 +64,23 @@ describe('MultiSeriesAnalyzer', () => {
 
         // T1: A>B. T2: A<B (cross 1). T3: A>B (cross 2).
         const output = MultiSeriesAnalyzer.process(dataA, dataB, 'A', 'B');
-        expect(output).toContain("intersected 2 times");
+        expect(output).toContain("- During the observation period, the two series physically intersected 2 times.");
         expect(output).toContain("The final reversal occurred at 3 (A upwardly crossed B)");
+    });
+
+    it('detects sine vs cosine as phase-shifted correlation despite zero static correlation', () => {
+        const dataA: TimePoint[] = [];
+        const dataB: TimePoint[] = [];
+
+        for (let i = 0; i < 200; i++) {
+            dataA.push({ time: i, value: Math.sin(i * 0.1) });
+            dataB.push({ time: i, value: Math.cos(i * 0.1) });
+        }
+
+        const output = MultiSeriesAnalyzer.process(dataA, dataB, 'Sine', 'Cosine');
+        
+        expect(output).toContain("No significant static synchronization");
+        expect(output).toContain("Highly correlated after phase shift!");
+        expect(output).toMatch(/Phase-Shifted Pearson: 0\.99|Phase-Shifted Pearson: 1\.00/);
     });
 });

@@ -10,32 +10,60 @@ export class MultiSeriesAnalyzer {
 
     let sb = `Time-Series Causal Relationship Analysis Report for [${nameA}] and [${nameB}]:\n\n`;
 
-    // Pearson Correlation
+    // 1. Concurrent Pearson Correlation
     const r = sampleCorrelation(valsA, valsB);
     const absR = Math.abs(r);
     
-    let rDesc = 'Moderate correlation';
-    if (absR < 0.3) rDesc = 'No significant synchronization';
-    else if (r > 0.6) rDesc = 'Highly positive correlation (Moving together)';
-    else if (r < -0.6) rDesc = 'Highly negative correlation (Inverse relationship)';
+    let rDesc = 'Moderate static correlation';
+    if (absR < 0.3) rDesc = 'No significant static synchronization';
+    else if (r > 0.6) rDesc = 'Highly positive static correlation (Moving together concurrently)';
+    else if (r < -0.6) rDesc = 'Highly negative static correlation (Inverse concurrent relationship)';
     
-    sb += `[Synchronous Correlation]: Both exhibit '${rDesc}' (Pearson Coefficient: ${r.toFixed(2)}).\n`;
+    sb += `[Concurrent Numerical Correlation]\n`;
+    sb += `- Both series exhibit '${rDesc}' (Pearson Coefficient: ${r.toFixed(2)}).\n`;
 
-    // Cross-Correlation Lag Detection
-    // Capped to math.min(n/3, 100) and max 10 to simulate c# constraint, though we optimized the math
-    const maxLag = Math.min(Math.floor(n / 3), 10);
-    const lagResult = MathUtility.calculateCrossCorrelation(valsA, valsB, maxLag);
-
-    sb += `\n[Temporal Lead-Lag Causality]\n`;
-    if (lagResult.bestCorrelation > 0.5 && lagResult.bestLag !== 0) {
-      const leader = lagResult.bestLag > 0 ? nameA : nameB;
-      const follower = lagResult.bestLag > 0 ? nameB : nameA;
-      sb += `Significant causal phenomenon detected: [${leader}] acts as the leading indicator. Following its shifts, [${follower}] accurately tracks the changes with a delay of ${Math.abs(lagResult.bestLag)} time units.\n`;
+    // 2. Directional Trend Agreement (New Mechanism)
+    let syncMoves = 0;
+    let trackableMoves = 0;
+    for (let i = 1; i < n; i++) {
+        const diffA = valsA[i] - valsA[i - 1];
+        const diffB = valsB[i] - valsB[i - 1];
+        // Only count if they are actually moving 
+        if (Math.abs(diffA) > 1e-9 && Math.abs(diffB) > 1e-9) {
+            trackableMoves++;
+            if ((diffA > 0 && diffB > 0) || (diffA < 0 && diffB < 0)) syncMoves++;
+        }
+    }
+    
+    sb += `\n[Directional Trend Agreement]\n`;
+    if (trackableMoves > 0) {
+        const agreePct = (syncMoves / trackableMoves) * 100;
+        let trendDesc = 'They step randomly relative to each other.';
+        if (agreePct > 70) trendDesc = `They share strong positive local momentum, physically stepping in the same direction ${agreePct.toFixed(1)}% of the time.`;
+        else if (agreePct < 30) trendDesc = `They move inversely tick-by-tick, diverging in direction ${(100 - agreePct).toFixed(1)}% of the time.`;
+        sb += `- ${trendDesc}\n`;
     } else {
-      sb += `Changes in both series mostly occur synchronously or irregularly. No obvious lead-lag tracking behavior detected.\n`;
+        sb += `- Not enough volatility to measure step-by-step directional agreement.\n`;
     }
 
-    // Intersections
+    // 3. Phase-Shifted Cross-Correlation (Temporal Causality)
+    const maxLag = Math.floor(n / 3);
+    const lagResult = MathUtility.calculateCrossCorrelation(valsA, valsB, maxLag);
+
+    sb += `\n[Temporal Lead-Lag Tracking (Phase-Shifted Causality)]\n`;
+    if (Math.abs(lagResult.bestCorrelation) > 0.5 && lagResult.bestLag !== 0) {
+      const leader = lagResult.bestLag > 0 ? nameA : nameB;
+      const follower = lagResult.bestLag > 0 ? nameB : nameA;
+      
+      sb += `- Highly correlated after phase shift! (Phase-Shifted Pearson: ${lagResult.bestCorrelation.toFixed(2)}).\n`;
+      sb += `- Significant causal phenomenon detected: [${leader}] acts as the leading indicator. Following its shifts, [${follower}] accurately tracks the structural changes with a delay/lag of ${Math.abs(lagResult.bestLag)} time units.\n`;
+    } else if (Math.abs(lagResult.bestCorrelation) <= 0.5) {
+      sb += `- No underlying delayed structural similarities were found (No phase-shifted correlation).\n`;
+    } else {
+      sb += `- Changes in both series mostly occur synchronously. No obvious pure lead-lag tracking behavior detected.\n`;
+    }
+
+    // 4. Value Intersections
     let crossCount = 0;
     let lastCross: string | null = null;
     
@@ -52,9 +80,9 @@ export class MultiSeriesAnalyzer {
 
     sb += `\n[Value Intersection Status]\n`;
     if (crossCount > 0) {
-      sb += `During the observation period, the two series intersected ${crossCount} times. The final reversal occurred at ${lastCross}.\n`;
+      sb += `- During the observation period, the two series physically intersected ${crossCount} times. The final reversal occurred at ${lastCross}.\n`;
     } else {
-      sb += `No intersections occurred during the observation period; one series consistently remained at a higher level than the other.\n`;
+      sb += `- No physical intersections occurred; one series consistently remained vertically separate from the other.\n`;
     }
 
     return sb;
