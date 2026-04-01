@@ -25,7 +25,7 @@ export class SingleSeriesAnalyzer {
 
       const foldedValues = MathUtility.extractGoldenProfile(values, T);
       const foldedData: TimePoint[] = foldedValues.map((val, i) => ({
-        time: `Phase ${((i * 100.0) / T).toFixed(0)}%`,
+        time: (i * 100.0) / T,
         value: val,
       }));
 

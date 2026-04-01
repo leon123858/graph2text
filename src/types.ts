@@ -1,5 +1,5 @@
 export interface TimePoint {
-  time: string;
+  time: number;
   value: number;
 }
 

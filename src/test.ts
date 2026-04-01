@@ -10,10 +10,10 @@ const dataB: TimePoint[] = [];
 
 for (let i = 0; i < 100000; i++) {
   // A structural wave with noise
-  dataA.push({ time: `T${i}`, value: Math.sin(i * 0.001) * 100 + Math.random() * 10 });
+  dataA.push({ time: i, value: Math.sin(i * 0.001) * 100 + Math.random() * 10 });
   
   // A leading wave (shifted by 200 time steps) to test causality
-  dataB.push({ time: `T${i}`, value: Math.cos((i + 200) * 0.001) * 100 + Math.random() * 10 });
+  dataB.push({ time: i, value: Math.cos((i + 200) * 0.001) * 100 + Math.random() * 10 });
 }
 
 console.log("Analyzing Single Series (A)...");

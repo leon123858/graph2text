@@ -8,27 +8,52 @@ export class MathUtility {
     // Variance check
     if (variance(values) === 0) return { isPeriodic: false };
 
+    let step = 1;
+    let downsampled = values;
+    if (n > 2000) {
+      step = Math.floor(n / 1000);
+      downsampled = values.filter((_, i) => i % step === 0);
+    }
+
+    // Pass 1: Global rough search on downsampled array
     let bestCorr = 0;
-    let bestPeriod = 0;
+    let bestRoughLag = 0;
+    const downsampledN = downsampled.length;
+    const roughLoopLimit = Math.min(Math.floor(maxLag / step), Math.floor(downsampledN / 3));
 
-    // Fast optimization for large datasets (100k points)
-    // Avoid checking all possible maxLags if maxLag is huge.
-    // Cap lag attempts to prevent freezing Node/Browser.
-    const loopLimit = Math.min(maxLag, 1000);
-
-    for (let lag = 2; lag <= loopLimit; lag++) {
-      const slice1 = values.slice(0, n - lag);
-      const slice2 = values.slice(lag, n);
-      
+    for (let lag = 2; lag <= roughLoopLimit; lag++) {
+      const slice1 = downsampled.slice(0, downsampledN - lag);
+      const slice2 = downsampled.slice(lag, downsampledN);
       const acf = sampleCorrelation(slice1, slice2);
 
       if (acf > bestCorr && acf > 0.45) {
         bestCorr = acf;
-        bestPeriod = lag;
+        bestRoughLag = lag;
       }
     }
 
-    return { isPeriodic: bestPeriod > 0, period: bestPeriod };
+    if (bestRoughLag === 0) return { isPeriodic: false };
+
+    // Pass 2: Local fine search around expected lag on the primary full-resolution array
+    const approxPeriod = bestRoughLag * step;
+    let bestFinalPeriod = 0;
+    let bestFinalCorr = 0;
+
+    const searchStart = Math.max(2, approxPeriod - step - 1);
+    const searchEnd = Math.min(maxLag, Math.min(n, approxPeriod + step + 1));
+
+    for (let lag = searchStart; lag <= searchEnd; lag++) {
+      const slice1 = values.slice(0, n - lag);
+      const slice2 = values.slice(lag, n);
+      const acf = sampleCorrelation(slice1, slice2);
+
+      if (acf > bestFinalCorr && acf > 0.45) {
+        bestFinalCorr = acf;
+        bestFinalPeriod = lag;
+      }
+    }
+
+    return { isPeriodic: bestFinalPeriod > 0, period: bestFinalPeriod };
   }
 
   public static calculateCrossCorrelation(a: number[], b: number[], maxLag: number): LagResult {

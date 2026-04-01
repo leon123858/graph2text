@@ -26,9 +26,9 @@ import { SemanticFeatureEngine, TimePoint } from 'semantic-time-series';
 
 // 1. Prepare your data points
 const myChartData: TimePoint[] = [
-  { time: 'T1', value: 100 },
-  { time: 'T2', value: 150 },
-  { time: 'T3', value: 100 },
+  { time: 1, value: 100 },
+  { time: 2, value: 150 },
+  { time: 3, value: 100 },
   // ... Up to 100,000 points ...
 ];
 

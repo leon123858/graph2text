@@ -8,8 +8,8 @@ describe('MultiSeriesAnalyzer', () => {
         const dataB: TimePoint[] = [];
 
         for (let i = 0; i < 30; i++) {
-            dataA.push({ time: `T${i}`, value: i * 2 + Math.random() });
-            dataB.push({ time: `T${i}`, value: i * 2 + Math.random() });
+            dataA.push({ time: i, value: i * 2 + Math.random() });
+            dataB.push({ time: i, value: i * 2 + Math.random() });
         }
 
         const output = MultiSeriesAnalyzer.process(dataA, dataB, 'A', 'B');
@@ -23,8 +23,8 @@ describe('MultiSeriesAnalyzer', () => {
         const dataB: TimePoint[] = [];
 
         for (let i = 0; i < 30; i++) {
-            dataA.push({ time: `T${i}`, value: i * 2 });
-            dataB.push({ time: `T${i}`, value: -i * 2 });
+            dataA.push({ time: i, value: i * 2 });
+            dataB.push({ time: i, value: -i * 2 });
         }
 
         const output = MultiSeriesAnalyzer.process(dataA, dataB, 'A', 'B');
@@ -40,8 +40,8 @@ describe('MultiSeriesAnalyzer', () => {
         // A lags B by 5 ticks => B leads A
         for (let i = 0; i < 50; i++) {
             const phaseB = i + 5;
-            dataA.push({ time: `T${i}`, value: Math.sin(i * 0.2) });
-            dataB.push({ time: `T${i}`, value: Math.sin(phaseB * 0.2) });
+            dataA.push({ time: i, value: Math.sin(i * 0.2) });
+            dataB.push({ time: i, value: Math.sin(phaseB * 0.2) });
         }
 
         const output = MultiSeriesAnalyzer.process(dataA, dataB, 'ValA', 'ValB');
@@ -53,19 +53,19 @@ describe('MultiSeriesAnalyzer', () => {
 
     it('detects and counts precise value intersections', () => {
         const dataA: TimePoint[] = [
-            { time: "T1", value: 10 },
-            { time: "T2", value: 5 },
-            { time: "T3", value: 10 }
+            { time: 1, value: 10 },
+            { time: 2, value: 5 },
+            { time: 3, value: 10 }
         ];
         const dataB: TimePoint[] = [
-            { time: "T1", value: 5 },
-            { time: "T2", value: 10 },
-            { time: "T3", value: 5 }
+            { time: 1, value: 5 },
+            { time: 2, value: 10 },
+            { time: 3, value: 5 }
         ];
 
         // T1: A>B. T2: A<B (cross 1). T3: A>B (cross 2).
         const output = MultiSeriesAnalyzer.process(dataA, dataB, 'A', 'B');
         expect(output).toContain("intersected 2 times");
-        expect(output).toContain("The final reversal occurred at T3 (A upwardly crossed B)");
+        expect(output).toContain("The final reversal occurred at 3 (A upwardly crossed B)");
     });
 });
