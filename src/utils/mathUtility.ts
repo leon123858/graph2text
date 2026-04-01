@@ -1,5 +1,5 @@
-import { sampleStandardDeviation, sampleCorrelation, variance } from 'simple-statistics';
-import { PeriodResult, LagResult, TurningPoint } from '../types.js';
+import { sampleStandardDeviation, sampleCorrelation, variance, mean } from 'simple-statistics';
+import { PeriodResult, LagResult, TurningPoint, PeakSignal, Segment } from '../types.js';
 
 export class MathUtility {
   public static detectDominantPeriod(values: number[], maxLag: number): PeriodResult {
@@ -194,5 +194,122 @@ export class MathUtility {
       }
     }
     return points;
+  }
+
+  public static zScorePeakDetection(values: number[], lag: number = 30, threshold: number = 3.5, influence: number = 0.5): PeakSignal[] {
+    const n = values.length;
+    if (n <= lag) return [];
+
+    const signals: number[] = new Array(n).fill(0);
+    const filteredY = [...values];
+    const avgFilter = new Array(n).fill(0);
+    const stdFilter = new Array(n).fill(0);
+
+    const initialWindow = values.slice(0, lag);
+    avgFilter[lag - 1] = mean(initialWindow);
+    stdFilter[lag - 1] = sampleStandardDeviation(initialWindow);
+
+    const results: PeakSignal[] = [];
+
+    for (let i = lag; i < n; i++) {
+        if (Math.abs(values[i] - avgFilter[i - 1]) > threshold * stdFilter[i - 1]) {
+            if (values[i] > avgFilter[i - 1]) {
+                signals[i] = 1;
+            } else {
+                signals[i] = -1;
+            }
+            filteredY[i] = influence * values[i] + (1 - influence) * filteredY[i - 1];
+        } else {
+            signals[i] = 0;
+            filteredY[i] = values[i];
+        }
+
+        // Optimized update: instead of slice-mean, we could do incremental mean/std, 
+        // but for robustness in JS with small windows (30), slice is fine.
+        const start = i - lag + 1;
+        const window = filteredY.slice(start, i + 1);
+        avgFilter[i] = mean(window);
+        stdFilter[i] = sampleStandardDeviation(window);
+
+        if (signals[i] !== 0 && signals[i - 1] === 0) {
+            results.push({
+                index: i,
+                value: values[i],
+                type: signals[i] === 1 ? 'peak' : 'valley',
+                score: Math.abs(values[i] - avgFilter[i - 1]) / (stdFilter[i - 1] || 1)
+            });
+        }
+    }
+
+    return results;
+  }
+
+  public static piecewiseLinearApproximation(values: number[], maxSegments: number = 8): Segment[] {
+    const n = values.length;
+    if (n < 2) return [];
+    
+    const segments: Segment[] = [];
+    const pointsPerSegment = Math.max(2, Math.floor(n / maxSegments));
+    
+    for (let i = 0; i < maxSegments; i++) {
+        const start = i * pointsPerSegment;
+        if (start >= n - 1) break;
+
+        let end = (i + 1) * pointsPerSegment;
+        if (i === maxSegments - 1 || end >= n) end = n - 1;
+        
+        const startVal = values[start];
+        const endVal = values[end];
+        const slope = (endVal - startVal) / (end - start);
+
+        segments.push({
+            startIndex: start,
+            endIndex: end,
+            startValue: startVal,
+            endValue: endVal,
+            slope
+        });
+    }
+    return segments;
+  }
+
+  public static saxEncoding(values: number[], segmentsCount: number = 12, alphabetSize: number = 5): string {
+    if (values.length < 2) return "";
+    
+    const avg = mean(values);
+    const std = sampleStandardDeviation(values) || 1;
+    const normalized = values.map(v => (v - avg) / std);
+    
+    const paa: number[] = [];
+    const pointsPerSegment = values.length / segmentsCount;
+    for (let i = 0; i < segmentsCount; i++) {
+        const start = Math.floor(i * pointsPerSegment);
+        const end = Math.floor((i + 1) * pointsPerSegment);
+        const segment = normalized.slice(start, end);
+        if (segment.length > 0) {
+            paa.push(mean(segment));
+        }
+    }
+    
+    // Breakpoints for N(0,1) for alphabet sizes 3-10
+    const breakpointsMap: Record<number, number[]> = {
+        3: [-0.43, 0.43],
+        4: [-0.67, 0, 0.67],
+        5: [-0.84, -0.25, 0.25, 0.84],
+        6: [-0.97, -0.43, 0, 0.43, 0.97],
+        7: [-1.07, -0.57, -0.18, 0.18, 0.57, 1.07],
+        8: [-1.15, -0.67, -0.32, 0, 0.32, 0.67, 1.15]
+    };
+    
+    const breakpoints = breakpointsMap[alphabetSize] || breakpointsMap[5];
+    const alphabet = "abcdefghij";
+    
+    return paa.map(val => {
+        let symIdx = 0;
+        while (symIdx < breakpoints.length && val > breakpoints[symIdx]) {
+            symIdx++;
+        }
+        return alphabet[symIdx];
+    }).join('');
   }
 }

@@ -13,6 +13,21 @@ export interface TurningPoint {
   value: number;
 }
 
+export interface Segment {
+  startIndex: number;
+  endIndex: number;
+  startValue: number;
+  endValue: number;
+  slope: number;
+}
+
+export interface PeakSignal {
+  index: number;
+  value: number;
+  type: 'peak' | 'valley';
+  score: number;
+}
+
 export interface LagResult {
   bestLag: number;
   bestCorrelation: number;

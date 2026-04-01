@@ -29,12 +29,12 @@ export class SingleSeriesAnalyzer {
         value: val,
       }));
 
-      sb += SingleSeriesAnalyzer.generateTrajectoryNarrative(foldedData, 'Standard Cycle Trajectory') + '\n';
+      sb += SingleSeriesAnalyzer.generateAdvancedTrajectoryNarrative(foldedData, 'Standard Cycle Trajectory') + '\n';
       sb += SingleSeriesAnalyzer.generateWaveformDistributionNarrative(foldedValues) + '\n';
     } else {
       // Rule 4: Non-periodic
-      sb += `1. Periodicity Conclusion: No distinct fixed repetitive cycles were detected. Global trajectory analysis follows:\n\n`;
-      sb += SingleSeriesAnalyzer.generateTrajectoryNarrative(data, name) + '\n';
+      sb += `1. Periodicity Conclusion: No distinct fixed repetitive cycles were detected. Advanced global trajectory analysis follows:\n\n`;
+      sb += SingleSeriesAnalyzer.generateAdvancedTrajectoryNarrative(data, name) + '\n';
     }
 
     return sb;
@@ -49,56 +49,47 @@ export class SingleSeriesAnalyzer {
     return sb;
   }
 
-  private static generateTrajectoryNarrative(data: TimePoint[], name: string): string {
-    const n = data.length;
+  private static generateAdvancedTrajectoryNarrative(data: TimePoint[], name: string): string {
     const values = data.map((d) => d.value);
+    const n = values.length;
+
+    // 1. Symbolic DNA (SAX)
+    const saxPattern = MathUtility.saxEncoding(values, 12, 5);
+
+    // 2. Trajectory Phases (PLA)
+    const segments = MathUtility.piecewiseLinearApproximation(values, 8);
+
+    // 3. Landmarks (Z-Score)
+    const peaks = MathUtility.zScorePeakDetection(values, Math.min(30, Math.floor(n / 5)), 3.5, 0.1);
 
     const vMin = min(values);
     const vMax = max(values);
     const avg = mean(values);
 
-    const p0 = 0,
-      p25 = Math.floor(n / 4),
-      p50 = Math.floor(n / 2),
-      p75 = Math.floor((n * 3) / 4),
-      p100 = n - 1;
+    let sb = `[Trajectory & Feature Analysis: ${name}]\n`;
+    sb += `- Global Statistics: Range [${vMin.toFixed(1)}, ${vMax.toFixed(1)}], Average: ${avg.toFixed(1)}\n`;
+    sb += `- Structural DNA: "${saxPattern}" (12-segment symbolic trend encoding)\n\n`;
 
-    let sb = `[Trajectory Skeleton]\n`;
-    sb += `Initial (${data[p0].time}): ${values[p0].toFixed(1)} -> Early (${data[p25].time}): ${values[p25].toFixed(1)} -> Mid (${data[p50].time}): ${values[p50].toFixed(1)} -> Late (${data[p75].time}): ${values[p75].toFixed(1)} -> Final (${data[p100].time}): ${values[p100].toFixed(1)}\n\n`;
+    sb += `[Phased Linear Trend Approximation]\n`;
+    segments.forEach((seg, i) => {
+      const slope = seg.slope;
+      let direction = 'Stable';
+      if (slope > 0.05) direction = 'Rising';
+      else if (slope < -0.05) direction = 'Falling';
 
-    const windowSize = Math.max(3, Math.floor(n / 20));
-    const smoothed = MathUtility.smoothDataCentered(values, windowSize);
-    const turningPoints = MathUtility.findMajorTurningPoints(smoothed, vMin, vMax);
+      sb += `- Phase ${i + 1} (${direction}): From ${data[seg.startIndex].time} (${seg.startValue.toFixed(1)}) to ${data[seg.endIndex].time} (${seg.endValue.toFixed(1)})\n`;
+    });
 
-    sb += `[Major Chronological Phases]\n`;
-    if (turningPoints.length === 0) {
-      sb += `The series exhibits stable unidirectional development or random fluctuations without extreme dramatic shifts. Overall values range from ${vMin.toFixed(1)} to ${vMax.toFixed(1)} (Average: ${avg.toFixed(1)}).\n`;
+    if (peaks.length > 0) {
+      sb += `\n[Landmark Events & Anomalies]\n`;
+      // Show top 5 by significance (score)
+      const topPeaks = [...peaks].sort((a, b) => b.score - a.score).slice(0, 5);
+      topPeaks.forEach((p) => {
+        const type = p.type === 'peak' ? 'Spike/High' : 'Dip/Low';
+        sb += `- ${type} at ${data[p.index].time} (Value: ${p.value.toFixed(1)}, Significance: ${p.score.toFixed(1)}σ)\n`;
+      });
     } else {
-      let prevIdx = 0;
-      for (let i = 0; i < turningPoints.length; i++) {
-        const currIdx = turningPoints[i].index;
-        const phase = values[currIdx] > values[prevIdx] ? 'Climb' : 'Decline';
-        sb += `- Phase ${i + 1} (${phase}): From ${data[prevIdx].time}(${values[prevIdx].toFixed(1)}) to turning point ${data[currIdx].time}(${values[currIdx].toFixed(1)}).\n`;
-        prevIdx = currIdx;
-      }
-      const finalPhase = values[n - 1] > values[prevIdx] ? 'Climb' : 'Decline';
-      sb += `- Phase ${turningPoints.length + 1} (${finalPhase}): Evolved to the end at ${data[n - 1].time}(${values[n - 1].toFixed(1)}).\n`;
-    }
-
-    const diffStdDev = MathUtility.calculateDifferencesStdDev(values);
-    const suddenChanges: string[] = [];
-    for (let i = 1; i < n; i++) {
-      const diff = values[i] - values[i - 1];
-      if (Math.abs(diff) > diffStdDev * 3.5 && Math.abs(diff) > (vMax - vMin) * 0.15) {
-        const action = diff > 0 ? 'Sudden Spike' : 'Sudden Crash';
-        suddenChanges.push(`Experienced a [${action}] at ${data[i].time} (Amplitude drop/rise of ${Math.abs(diff).toFixed(1)})`);
-      }
-    }
-
-    if (suddenChanges.length > 0) {
-      sb += `\n[Sudden Volatility Warning]\n`;
-      const topChanges = suddenChanges.slice(0, 3);
-      for (const change of topChanges) sb += `- ${change}\n`;
+      sb += `\n- No significant localized anomalies detected via Z-score analysis.\n`;
     }
 
     return sb;
@@ -106,27 +97,56 @@ export class SingleSeriesAnalyzer {
 
   private static generateWaveformDistributionNarrative(foldedCycle: number[]): string {
     const T = foldedCycle.length;
-    let minVal = foldedCycle[0], maxVal = foldedCycle[0];
+    if (T < 3) return "[Waveform Morphological Distribution]\n- Insufficient data for analysis.\n";
+
+    const mean = foldedCycle.reduce((sum, val) => sum + val, 0) / T;
+    const smoothed = new Array(T);
+    for (let i = 0; i < T; i++) {
+      const prev = foldedCycle[(i - 1 + T) % T];
+      const curr = foldedCycle[i];
+      const next = foldedCycle[(i + 1) % T];
+      smoothed[i] = (prev + curr + next) / 3;
+    }
+
+    let minVal = smoothed[0], maxVal = smoothed[0];
     let minIdx = 0, maxIdx = 0;
 
     for (let i = 1; i < T; i++) {
-      if (foldedCycle[i] < minVal) { minVal = foldedCycle[i]; minIdx = i; }
-      if (foldedCycle[i] > maxVal) { maxVal = foldedCycle[i]; maxIdx = i; }
+      if (smoothed[i] < minVal) { minVal = smoothed[i]; minIdx = i; }
+      if (smoothed[i] > maxVal) { maxVal = smoothed[i]; maxIdx = i; }
     }
 
-    const riseDuration = maxIdx > minIdx ? maxIdx - minIdx : T - minIdx + maxIdx;
-    const fallDuration = T - riseDuration;
+    const amplitude = maxVal - minVal;
+    const isFlat = mean !== 0 ? (amplitude / Math.abs(mean)) < 0.05 : amplitude < 0.01;
+
+    let sb = `[Waveform Morphological Distribution]\n`;
+
+    if (isFlat) {
+      sb += `- Shape Classification: The cycle is categorized as 'Flat/Stable' (No significant fluctuations detected).\n`;
+      sb += `- Amplitude: Peak-to-peak amplitude is negligible.\n`;
+      return sb;
+    }
+
+    let riseDuration = maxIdx > minIdx ? maxIdx - minIdx : T - minIdx + maxIdx;
+    let fallDuration = T - riseDuration;
 
     let shape = 'Symmetrical Waveform (Similar ramp-up and decay times)';
     if (riseDuration > fallDuration * 1.5) shape = 'Left-skewed Waveform (Slow ramp-up, rapid decay)';
     else if (fallDuration > riseDuration * 1.5) shape = 'Right-skewed Waveform (Sudden spike, slow decay)';
 
+    const nearPeakCount = smoothed.filter(v => v >= maxVal - (amplitude * 0.1)).length;
+    const hasMultiplePeaks = nearPeakCount > (T * 0.2);
+
     const peakPhase = (maxIdx / T) * 100.0;
 
-    let sb = `[Waveform Morphological Distribution]\n`;
-    sb += `- Shape Classification: The cycle is categorized as '${shape}'.\n`;
-    sb += `- Phase Location: The main peak consistently occurs at approximately ${peakPhase.toFixed(0)}% of the cycle progress.\n`;
-    sb += `- Energy Accumulation: The ramp-up from valley to peak takes about ${((riseDuration / T) * 100).toFixed(0)}% of the cycle duration, while the decay phase accounts for ${((fallDuration / T) * 100).toFixed(0)}%.\n`;
+    if (hasMultiplePeaks) {
+      sb += `- Shape Classification: Complex/Multi-peak Waveform (Broad peak area detected).\n`;
+    } else {
+      sb += `- Shape Classification: The primary cycle is categorized as '${shape}'.\n`;
+    }
+
+    sb += `- Phase Location: The primary peak occurs at approximately ${peakPhase.toFixed(0)}% of the cycle progress.\n`;
+    sb += `- Energy Distribution: The primary ramp-up takes about ${((riseDuration / T) * 100).toFixed(0)}% of the cycle duration, while the decay phase accounts for ${((fallDuration / T) * 100).toFixed(0)}%.\n`;
 
     return sb;
   }

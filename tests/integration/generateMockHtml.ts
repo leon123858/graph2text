@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { SemanticFeatureEngine, TimePoint } from './index.js';
+import { SemanticFeatureEngine, TimePoint } from '../../src/index.js';
 
 // Setup pure math for data gen
 console.log("Generating test data points (100k points for A, slightly less for B to test robustness...)");

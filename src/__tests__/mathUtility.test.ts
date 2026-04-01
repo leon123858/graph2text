@@ -69,4 +69,45 @@ describe('MathUtility', () => {
         expect(tp[1].value).toBe(-10);
         expect(tp[1].index).toBe(8); // idx 8 is -10
     });
+
+    it('should detect significant peaks and valleys via Z-score', () => {
+        // Flat serie with high spike
+        const values = new Array(50).fill(10);
+        values[30] = 100; // Spike
+        values[40] = -50;  // Dip
+
+        const peaks = MathUtility.zScorePeakDetection(values, 10, 3.5, 0.1);
+        
+        // Should find at least the spike and the dip
+        const spike = peaks.find(p => p.type === 'peak' && p.index === 30);
+        const dip = peaks.find(p => p.type === 'valley' && p.index === 40);
+        
+        expect(spike).toBeDefined();
+        expect(dip).toBeDefined();
+        expect(spike!.value).toBe(100);
+        expect(dip!.value).toBe(-50);
+    });
+
+    it('should simplify trajectory via PLA', () => {
+        const values = [0, 1, 2, 3, 4, 10, 9, 8, 7, 0, 1, 2, 3, 4]; // 14 points
+        const segments = MathUtility.piecewiseLinearApproximation(values, 4);
+        
+        expect(segments.length).toBeLessThanOrEqual(4);
+        expect(segments[0].startIndex).toBe(0);
+        expect(segments[segments.length - 1].endIndex).toBe(values.length - 1);
+        // First segment should be rising
+        expect(segments[0].slope).toBeGreaterThan(0);
+    });
+
+    it('should encode series into SAX symbols', () => {
+        const values = [1, 1, 1, 10, 10, 10, 5, 5, 5, 1, 1, 1];
+        const sax = MathUtility.saxEncoding(values, 4, 5); // 4 segments, alphabet size 5
+        
+        expect(sax.length).toBe(4);
+        // Pattern should reflect Low -> High -> Med -> Low
+        // With alphabet 5 (a,b,c,d,e): a/b is low, c is med, d/e is high
+        expect(sax[0].charCodeAt(0)).toBeLessThanOrEqual('b'.charCodeAt(0));
+        expect(sax[1].charCodeAt(0)).toBeGreaterThanOrEqual('d'.charCodeAt(0));
+        expect(sax[3].charCodeAt(0)).toBeLessThanOrEqual('b'.charCodeAt(0));
+    });
 });

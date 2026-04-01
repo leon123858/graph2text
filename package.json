@@ -8,8 +8,10 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc -w",
-    "test": "yarn build && node ./dist/test.js",
+    "test": "yarn test:unit && yarn test:integration-mock && yarn test:integration-real",
     "test:unit": "vitest run",
+    "test:integration-mock": "node --loader ts-node/esm tests/integration/generateMockHtml.ts",
+    "test:integration-real": "node --loader ts-node/esm tests/integration/csvRealDataValidation.ts",
     "coverage": "vitest run --coverage",
     "prepublishOnly": "yarn build"
   },
