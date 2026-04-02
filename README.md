@@ -1,5 +1,10 @@
 # Semantic Time Series 📊➡️📝
 
+> **Project Status**
+> This repository is an experimental project created for exploration and validation purposes only.
+> Its current architecture is not suitable for supporting complex application requirements or production-scale evolution.
+> The project is now archived, and no further active development is planned.
+
 **Semantic Time Series** is a highly optimized, purely TypeScript-based package designed to transform thousands of complex time-series data points into readable, analytical, feature-rich textual narratives. It is specifically engineered to bridge the gap between raw telemetry/charts and Large Language Models (LLMs) that struggle to interpret massive continuous numerical arrays.
 
 ## Key Features 🚀
